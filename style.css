@@ -1,0 +1,273 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #1a1a2e;
+}
+
+#sidebar {
+  width: 360px;
+  min-width: 360px;
+  padding: 20px;
+  overflow-y: auto;
+  background: #f8f9fa;
+  border-right: 1px solid #dee2e6;
+}
+
+#map {
+  flex: 1;
+  height: 100vh;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin-bottom: 16px;
+  color: #16213e;
+}
+
+h2 {
+  font-size: 1rem;
+  margin-bottom: 10px;
+  color: #16213e;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #dee2e6;
+  margin: 16px 0;
+}
+
+.input-group {
+  margin-bottom: 12px;
+}
+
+.input-group label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #495057;
+}
+
+.input-group input,
+.input-group select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: #fff;
+}
+
+.input-group input:focus,
+.input-group select:focus {
+  outline: none;
+  border-color: #4a90d9;
+  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
+}
+
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
+.btn {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-preview {
+  background: #e9ecef;
+  color: #495057;
+}
+
+.btn-preview:hover:not(:disabled) {
+  background: #dee2e6;
+}
+
+.btn-accept {
+  background: #2d6a4f;
+  color: #fff;
+}
+
+.btn-accept:hover:not(:disabled) {
+  background: #1b4332;
+}
+
+.btn-cancel {
+  background: #f8d7da;
+  color: #842029;
+}
+
+.btn-cancel:hover:not(:disabled) {
+  background: #f5c2c7;
+}
+
+.btn-intersections {
+  background: #4a90d9;
+  color: #fff;
+}
+
+.btn-intersections:hover:not(:disabled) {
+  background: #357ab8;
+}
+
+.btn-delete {
+  background: #dc3545;
+  color: #fff;
+}
+
+.btn-delete:hover {
+  background: #b02a37;
+}
+
+.status {
+  font-size: 0.8rem;
+  padding: 6px 0;
+  min-height: 24px;
+}
+
+.status.error {
+  color: #dc3545;
+}
+
+.status.info {
+  color: #0d6efd;
+}
+
+.circle-list {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.empty-msg {
+  font-size: 0.85rem;
+  color: #6c757d;
+  font-style: italic;
+}
+
+.circle-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+.circle-item .circle-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  margin-right: 8px;
+  flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+
+.circle-item .circle-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.circle-item .circle-label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.circle-item .circle-detail {
+  color: #6c757d;
+  font-size: 0.75rem;
+}
+
+.circle-item .delete-btn {
+  background: none;
+  border: none;
+  color: #adb5bd;
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.2s, background 0.2s;
+}
+
+.circle-item .delete-btn:hover {
+  color: #dc3545;
+  background: #f8d7da;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 10px;
+  padding: 24px;
+  max-width: 360px;
+  width: 90%;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+}
+
+.modal h3 {
+  margin-bottom: 10px;
+  color: #dc3545;
+}
+
+.modal p {
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+  color: #495057;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-buttons .btn {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.intersection-info {
+  font-size: 0.82rem;
+  color: #495057;
+  margin-top: 8px;
+}
+
+.intersection-info p {
+  margin-bottom: 4px;
+}
