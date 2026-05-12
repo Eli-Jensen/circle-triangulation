@@ -4,12 +4,98 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
+// Try to center map on user's current location
+if ('geolocation' in navigator) {
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      map.setView([pos.coords.latitude, pos.coords.longitude], 10);
+    },
+    () => { /* denied or error — keep default view */ },
+    { enableHighAccuracy: false, timeout: 5000 }
+  );
+}
+
 const circles = [];
 let previewCircle = null;
 let previewMarker = null;
 let intersectionMarkers = [];
 let intersectionShapes = [];
 let deleteTarget = null;
+
+// --- Undo system ---
+const undoStack = [];
+const MAX_UNDO = 50;
+
+function pushUndo(action) {
+  undoStack.push(action);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+function undoAdd(action) {
+  const idx = circles.findIndex(c => c.id === action.id);
+  if (idx === -1) { setStatus('Nothing to undo.', 'info'); return; }
+  map.removeLayer(circles[idx].circle);
+  map.removeLayer(circles[idx].marker);
+  circles.splice(idx, 1);
+  renderCircleList();
+  updateIntersectionButton();
+  clearIntersections();
+  setStatus('Undo: circle removed.', 'info');
+}
+
+function undoDelete(action) {
+  const circle = L.circle([action.data.lat, action.data.lng], {
+    radius: action.data.radiusMeters,
+    color: action.data.color,
+    fillColor: action.data.color,
+    fillOpacity: 0.08,
+    weight: 2,
+  }).addTo(map);
+
+  const marker = L.circleMarker([action.data.lat, action.data.lng], {
+    radius: 5,
+    color: action.data.color,
+    fillColor: action.data.color,
+    fillOpacity: 1,
+  }).addTo(map);
+
+  const insertIdx = Math.min(action.index, circles.length);
+  circles.splice(insertIdx, 0, { id: action.id, circle, marker, data: { ...action.data } });
+  renderCircleList();
+  updateIntersectionButton();
+  clearIntersections();
+  setStatus('Undo: circle restored.', 'info');
+}
+
+function undoMove(action) {
+  const entry = circles.find(c => c.id === action.id);
+  if (!entry) { setStatus('Nothing to undo.', 'info'); return; }
+  entry.circle.setLatLng([action.oldLat, action.oldLng]);
+  entry.marker.setLatLng([action.oldLat, action.oldLng]);
+  entry.data.lat = action.oldLat;
+  entry.data.lng = action.oldLng;
+  clearIntersections();
+  setStatus('Undo: circle moved back.', 'info');
+}
+
+function performUndo() {
+  if (undoStack.length === 0) {
+    setStatus('Nothing to undo.', 'info');
+    return;
+  }
+  const action = undoStack.pop();
+  switch (action.type) {
+    case 'add':    undoAdd(action);    break;
+    case 'delete': undoDelete(action); break;
+    case 'move':   undoMove(action);   break;
+  }
+}
+
+// Selected location from "Use My Location" or "Pick on Map" — skips geocoding when set
+let selectedLocation = null;
+// Pick-on-map state
+let pickMode = false;
+let pickMarker = null;
 
 const addressInput = document.getElementById('address');
 const radiusInput = document.getElementById('radius');
@@ -27,6 +113,8 @@ const deleteModal = document.getElementById('delete-modal');
 const deleteModalText = document.getElementById('delete-modal-text');
 const deleteConfirm = document.getElementById('delete-confirm');
 const deleteCancel = document.getElementById('delete-cancel');
+const myLocationBtn = document.getElementById('my-location-btn');
+const pickMapBtn = document.getElementById('pick-map-btn');
 
 function setStatus(msg, type = 'info') {
   statusEl.textContent = msg;
@@ -39,11 +127,23 @@ function clearStatus() {
 }
 
 function toMeters(value, unit) {
-  return unit === 'mi' ? value * 1609.344 : value * 1000;
+  switch (unit) {
+    case 'mi': return value * 1609.344;
+    case 'km': return value * 1000;
+    case 'ft': return value * 0.3048;
+    case 'm':  return value;
+    default:   return value * 1000;
+  }
 }
 
 function toDisplayUnit(meters, unit) {
-  return unit === 'mi' ? meters / 1609.344 : meters / 1000;
+  switch (unit) {
+    case 'mi': return meters / 1609.344;
+    case 'km': return meters / 1000;
+    case 'ft': return meters / 0.3048;
+    case 'm':  return meters;
+    default:   return meters / 1000;
+  }
 }
 
 async function geocode(address) {
@@ -59,6 +159,168 @@ async function geocode(address) {
     displayName: data[0].display_name,
   };
 }
+
+async function reverseGeocode(lat, lng) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'CircleTriangulationApp/1.0' }
+  });
+  const data = await res.json();
+  return data.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+}
+
+function setSelectedLocation(lat, lng, displayName) {
+  selectedLocation = { lat, lng, displayName };
+}
+
+function clearSelectedLocation() {
+  selectedLocation = null;
+}
+
+// Clear selectedLocation when user manually edits the address field
+addressInput.addEventListener('input', () => {
+  clearSelectedLocation();
+  removePickMarker();
+});
+
+// --- Use My Location ---
+myLocationBtn.addEventListener('click', () => {
+  if (!('geolocation' in navigator)) {
+    setStatus('Geolocation not supported.', 'error');
+    return;
+  }
+  myLocationBtn.classList.add('loading');
+  setStatus('Getting your location...', 'info');
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      try {
+        const displayName = await reverseGeocode(lat, lng);
+        addressInput.value = displayName.split(',').slice(0, 3).join(',').trim();
+        setSelectedLocation(lat, lng, displayName);
+        setStatus('Location set.', 'info');
+        map.setView([lat, lng], 12);
+      } catch {
+        addressInput.value = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        setSelectedLocation(lat, lng, `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+        setStatus('Location set (reverse geocode failed).', 'info');
+      }
+      myLocationBtn.classList.remove('loading');
+    },
+    () => {
+      setStatus('Location access denied.', 'error');
+      myLocationBtn.classList.remove('loading');
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+});
+
+// --- Pick on Map ---
+function removePickMarker() {
+  if (pickMarker) {
+    map.removeLayer(pickMarker);
+    pickMarker = null;
+  }
+}
+
+function buildCoordPopup(lat, lng) {
+  return `
+    <div class="coord-popup-form">
+      <label>Latitude</label>
+      <input type="number" step="any" id="popup-lat" value="${lat.toFixed(6)}" />
+      <label>Longitude</label>
+      <input type="number" step="any" id="popup-lng" value="${lng.toFixed(6)}" />
+      <button onclick="updatePickMarkerFromPopup()">Update</button>
+    </div>
+  `;
+}
+
+// Globally accessible so the popup button can call it
+window.updatePickMarkerFromPopup = function () {
+  const latInput = document.getElementById('popup-lat');
+  const lngInput = document.getElementById('popup-lng');
+  if (!latInput || !lngInput) return;
+  const lat = parseFloat(latInput.value);
+  const lng = parseFloat(lngInput.value);
+  if (isNaN(lat) || isNaN(lng)) return;
+  if (pickMarker) {
+    pickMarker.setLatLng([lat, lng]);
+    pickMarker.closePopup();
+    pickMarker.setPopupContent(buildCoordPopup(lat, lng));
+  }
+  setSelectedLocation(lat, lng, `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+  reverseGeocode(lat, lng).then(name => {
+    const short = name.split(',').slice(0, 3).join(',').trim();
+    addressInput.value = short;
+    setSelectedLocation(lat, lng, name);
+  }).catch(() => {
+    addressInput.value = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  });
+};
+
+function placePickMarker(lat, lng) {
+  removePickMarker();
+  pickMarker = L.marker([lat, lng], { draggable: true }).addTo(map);
+  pickMarker.bindPopup(buildCoordPopup(lat, lng));
+
+  pickMarker.on('dragend', async () => {
+    const pos = pickMarker.getLatLng();
+    pickMarker.setPopupContent(buildCoordPopup(pos.lat, pos.lng));
+    setSelectedLocation(pos.lat, pos.lng, `${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)}`);
+    try {
+      const name = await reverseGeocode(pos.lat, pos.lng);
+      const short = name.split(',').slice(0, 3).join(',').trim();
+      addressInput.value = short;
+      setSelectedLocation(pos.lat, pos.lng, name);
+    } catch {
+      addressInput.value = `${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)}`;
+    }
+  });
+}
+
+function enablePickMode() {
+  pickMode = true;
+  pickMapBtn.classList.add('active');
+  pickMapBtn.textContent = '\u{1F5FA} Cancel Pick';
+  document.getElementById('map').classList.add('pick-mode');
+  setStatus('Click on the map to place circle center.', 'info');
+}
+
+function disablePickMode() {
+  pickMode = false;
+  pickMapBtn.classList.remove('active');
+  pickMapBtn.textContent = '\u{1F5FA} Pick on Map';
+  document.getElementById('map').classList.remove('pick-mode');
+}
+
+pickMapBtn.addEventListener('click', () => {
+  if (pickMode) {
+    disablePickMode();
+    removePickMarker();
+    clearSelectedLocation();
+    clearStatus();
+  } else {
+    enablePickMode();
+  }
+});
+
+map.on('click', async (e) => {
+  if (!pickMode) return;
+  const { lat, lng } = e.latlng;
+  placePickMarker(lat, lng);
+  setSelectedLocation(lat, lng, `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+  addressInput.value = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  disablePickMode();
+  setStatus('Point placed. Drag to adjust, or click marker to edit coords.', 'info');
+
+  try {
+    const name = await reverseGeocode(lat, lng);
+    const short = name.split(',').slice(0, 3).join(',').trim();
+    addressInput.value = short;
+    setSelectedLocation(lat, lng, name);
+  } catch { /* keep coordinate fallback */ }
+});
 
 function removePreview() {
   if (previewCircle) {
@@ -78,55 +340,102 @@ previewBtn.addEventListener('click', async () => {
   const radiusVal = parseFloat(radiusInput.value);
   const unit = unitSelect.value;
 
-  if (!address) { setStatus('Enter an address.', 'error'); return; }
+  if (!address && !selectedLocation) { setStatus('Enter an address or pick a point.', 'error'); return; }
   if (isNaN(radiusVal) || radiusVal <= 0) { setStatus('Enter a valid radius.', 'error'); return; }
 
   removePreview();
-  setStatus('Geocoding address...', 'info');
 
+  let geo;
   try {
-    const geo = await geocode(address);
-    const meters = toMeters(radiusVal, unit);
-    const color = colorInput.value;
-
-    previewCircle = L.circle([geo.lat, geo.lng], {
-      radius: meters,
-      color: color,
-      fillColor: color,
-      fillOpacity: 0.12,
-      weight: 2,
-      dashArray: '8 4',
-    }).addTo(map);
-
-    previewMarker = L.circleMarker([geo.lat, geo.lng], {
-      radius: 5,
-      color: color,
-      fillColor: color,
-      fillOpacity: 1,
-    }).addTo(map);
-
-    previewCircle._previewData = {
-      lat: geo.lat,
-      lng: geo.lng,
-      radiusMeters: meters,
-      radiusDisplay: radiusVal,
-      unit: unit,
-      color: color,
-      displayName: geo.displayName,
-      address: address,
-    };
-
-    map.fitBounds(previewCircle.getBounds().pad(0.2));
-    setStatus(`Preview: ${geo.displayName.split(',').slice(0, 2).join(',')}`, 'info');
-    acceptBtn.disabled = false;
-    cancelBtn.style.display = '';
+    if (selectedLocation) {
+      geo = selectedLocation;
+      setStatus('Using selected location...', 'info');
+    } else {
+      setStatus('Geocoding address...', 'info');
+      geo = await geocode(address);
+    }
   } catch (e) {
     setStatus(e.message, 'error');
+    return;
   }
+
+  const meters = toMeters(radiusVal, unit);
+  const color = colorInput.value;
+
+  // Hide pick marker while preview is showing
+  removePickMarker();
+  disablePickMode();
+
+  previewCircle = L.circle([geo.lat, geo.lng], {
+    radius: meters,
+    color: color,
+    fillColor: color,
+    fillOpacity: 0.12,
+    weight: 2,
+    dashArray: '8 4',
+  }).addTo(map);
+
+  previewMarker = L.marker([geo.lat, geo.lng], {
+    draggable: true,
+    icon: L.divIcon({
+      className: 'preview-center-icon',
+      html: `<div style="
+        width: 12px; height: 12px;
+        background: ${color};
+        border: 2px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      "></div>`,
+      iconSize: [12, 12],
+      iconAnchor: [6, 6],
+    }),
+  }).addTo(map);
+
+  previewCircle._previewData = {
+    lat: geo.lat,
+    lng: geo.lng,
+    radiusMeters: meters,
+    radiusDisplay: radiusVal,
+    unit: unit,
+    color: color,
+    displayName: geo.displayName,
+    address: address || geo.displayName.split(',').slice(0, 3).join(',').trim(),
+  };
+
+  // Drag the preview center to reposition the circle
+  previewMarker.on('drag', (e) => {
+    const newLatLng = e.target.getLatLng();
+    previewCircle.setLatLng(newLatLng);
+    previewCircle._previewData.lat = newLatLng.lat;
+    previewCircle._previewData.lng = newLatLng.lng;
+  });
+
+  previewMarker.on('dragend', async (e) => {
+    const pos = e.target.getLatLng();
+    try {
+      const name = await reverseGeocode(pos.lat, pos.lng);
+      const short = name.split(',').slice(0, 3).join(',').trim();
+      previewCircle._previewData.displayName = name;
+      previewCircle._previewData.address = short;
+      setStatus(`Preview moved to: ${short}`, 'info');
+    } catch {
+      const fallback = `${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)}`;
+      previewCircle._previewData.address = fallback;
+      setStatus(`Preview moved to: ${fallback}`, 'info');
+    }
+  });
+
+  map.fitBounds(previewCircle.getBounds().pad(0.2));
+  setStatus(`Preview: ${geo.displayName.split(',').slice(0, 2).join(',')} — drag center to reposition`, 'info');
+  acceptBtn.disabled = false;
+  cancelBtn.style.display = '';
 });
 
 cancelBtn.addEventListener('click', () => {
   removePreview();
+  removePickMarker();
+  clearSelectedLocation();
+  disablePickMode();
   clearStatus();
 });
 
@@ -154,11 +463,18 @@ acceptBtn.addEventListener('click', () => {
 
   const id = Date.now();
   circles.push({ id, circle, marker, data });
+  pushUndo({ type: 'add', id });
 
   previewCircle = null;
   previewMarker = null;
   acceptBtn.disabled = true;
   cancelBtn.style.display = 'none';
+
+  // Clean up pick/location state for next circle
+  removePickMarker();
+  clearSelectedLocation();
+  disablePickMode();
+  addressInput.value = '';
 
   renderCircleList();
   updateIntersectionButton();
@@ -205,6 +521,7 @@ deleteConfirm.addEventListener('click', () => {
   if (deleteTarget == null) return;
   const idx = circles.findIndex(c => c.id === deleteTarget);
   if (idx !== -1) {
+    pushUndo({ type: 'delete', id: circles[idx].id, index: idx, data: { ...circles[idx].data } });
     map.removeLayer(circles[idx].circle);
     map.removeLayer(circles[idx].marker);
     circles.splice(idx, 1);
@@ -415,4 +732,39 @@ addressInput.addEventListener('keydown', (e) => {
 
 radiusInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') previewBtn.click();
+});
+
+// --- Global keyboard shortcuts ---
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement?.tagName;
+  const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  const modalOpen = deleteModal.style.display === 'flex';
+
+  // Escape: close modal or cancel preview (works even in inputs)
+  if (e.key === 'Escape') {
+    if (modalOpen) {
+      deleteCancel.click();
+    } else if (previewCircle) {
+      cancelBtn.click();
+    }
+    return;
+  }
+
+  // Don't intercept shortcuts while typing in inputs
+  if (inInput) return;
+
+  // Cmd+Z / Ctrl+Z: undo
+  if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+    if (modalOpen) return;
+    e.preventDefault();
+    performUndo();
+    return;
+  }
+
+  // Enter: accept preview
+  if (e.key === 'Enter' && previewCircle && !acceptBtn.disabled) {
+    e.preventDefault();
+    acceptBtn.click();
+    return;
+  }
 });

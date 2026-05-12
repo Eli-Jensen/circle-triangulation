@@ -13,8 +13,13 @@
 
     <div class="input-group">
       <label for="address">Address or Location</label>
-      <input type="text" id="address" placeholder="e.g. 1600 Pennsylvania Ave, Washington DC" />
+      <div class="address-row">
+        <input type="text" id="address" placeholder="e.g. 1600 Pennsylvania Ave, Washington DC" />
+        <button type="button" id="my-location-btn" class="icon-btn" title="Use my current location">&#x1F4CD;</button>
+      </div>
     </div>
+
+    <button id="pick-map-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
 
     <div class="input-row">
       <div class="input-group" style="flex:1">
@@ -26,6 +31,8 @@
         <select id="unit">
           <option value="km">km</option>
           <option value="mi">mi</option>
+          <option value="m">m</option>
+          <option value="ft">ft</option>
         </select>
       </div>
     </div>

@@ -72,9 +72,118 @@ hr {
   box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
 }
 
+.address-row {
+  display: flex !important;
+  align-items: stretch;
+}
+
+#address {
+  flex: 1 1 0% !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+  border-right: none !important;
+}
+
+.icon-btn {
+  width: 38px;
+  flex-shrink: 0;
+  border: 1px solid #ced4da;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  background: #fff;
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.icon-btn:hover {
+  background: #e9ecef;
+  border-color: #adb5bd;
+}
+
+.icon-btn.loading {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.btn-pick-map {
+  background: #e9ecef;
+  color: #495057;
+}
+
+.btn-pick-map:hover:not(:disabled) {
+  background: #dee2e6;
+}
+
+.btn-pick-map.active {
+  background: #4a90d9;
+  color: #fff;
+}
+
+.btn-pick-map.active:hover {
+  background: #357ab8;
+}
+
 .input-row {
   display: flex;
   gap: 10px;
+}
+
+#map.pick-mode {
+  cursor: crosshair;
+}
+
+.preview-center-icon {
+  cursor: grab;
+}
+
+.preview-center-icon:active {
+  cursor: grabbing;
+}
+
+.coord-popup-form {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.8rem;
+}
+
+.coord-popup-form label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+  color: #495057;
+  font-size: 0.75rem;
+}
+
+.coord-popup-form input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  margin-bottom: 6px;
+}
+
+.coord-popup-form button {
+  width: 100%;
+  padding: 5px;
+  background: #4a90d9;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.coord-popup-form button:hover {
+  background: #357ab8;
 }
 
 .btn {
