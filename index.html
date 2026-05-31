@@ -19,6 +19,11 @@
       </div>
     </div>
 
+    <div id="recent-locations" class="recent-locations" style="display:none">
+      <label class="recent-label">Recent Locations</label>
+      <div id="recent-list"></div>
+    </div>
+
     <button id="pick-map-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
 
     <div class="input-row">
@@ -29,18 +34,15 @@
       <div class="input-group" style="width:100px">
         <label for="unit">Unit</label>
         <select id="unit">
-          <option value="km">km</option>
           <option value="mi">mi</option>
-          <option value="m">m</option>
           <option value="ft">ft</option>
+          <option value="km">km</option>
+          <option value="m">m</option>
         </select>
       </div>
     </div>
 
-    <div class="input-group">
-      <label for="circle-color">Color</label>
-      <input type="color" id="circle-color" value="#3388ff" />
-    </div>
+    <input type="hidden" id="circle-color" value="#3388ff" />
 
     <button id="preview-btn" class="btn btn-preview">Preview Circle</button>
     <button id="accept-btn" class="btn btn-accept" disabled>Accept Circle</button>
@@ -61,6 +63,22 @@
     <button id="show-intersections-btn" class="btn btn-intersections" disabled>Show Intersections</button>
     <button id="clear-intersections-btn" class="btn btn-cancel" style="display:none">Clear Intersections</button>
     <div id="intersection-info" class="intersection-info"></div>
+
+    <hr />
+
+    <h2>Population Analysis</h2>
+    <p class="help-text">1 circle: highlights populated edges. 2+ circles: highlights populated intersections.</p>
+    <button id="analyze-pop-btn" class="btn btn-population" disabled>Analyze Population</button>
+    <button id="clear-pop-btn" class="btn btn-cancel" style="display:none">Clear Population Data</button>
+    <div id="population-info" class="intersection-info"></div>
+
+    <hr />
+
+    <details class="dev-tools">
+      <summary>Dev Tools</summary>
+      <button id="dev-add-test" class="btn btn-dev">Add 2 Test Circles</button>
+      <button id="dev-clear-all" class="btn btn-dev">Clear All Circles</button>
+    </details>
   </div>
 
   <div id="map"></div>

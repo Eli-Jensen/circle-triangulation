@@ -1,3 +1,5 @@
+const API_BASE = 'http://localhost:8081';
+
 const map = L.map('map').setView([39.8283, -98.5795], 4);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors',
@@ -22,28 +24,54 @@ let intersectionMarkers = [];
 let intersectionShapes = [];
 let deleteTarget = null;
 
-// --- Undo system ---
+// --- Undo/Redo system ---
 const undoStack = [];
+const redoStack = [];
 const MAX_UNDO = 50;
 
 function pushUndo(action) {
   undoStack.push(action);
   if (undoStack.length > MAX_UNDO) undoStack.shift();
+  // New action invalidates redo history
+  redoStack.length = 0;
 }
 
-function undoAdd(action) {
-  const idx = circles.findIndex(c => c.id === action.id);
-  if (idx === -1) { setStatus('Nothing to undo.', 'info'); return; }
+function deleteCircleById(id) {
+  const idx = circles.findIndex(c => c.id === id);
+  if (idx === -1) return;
+  if (selectedCircleId === id) {
+    // Clean up drag marker without full deselect (circle is being removed)
+    if (circles[idx]._dragMarker) {
+      map.removeLayer(circles[idx]._dragMarker);
+      circles[idx]._dragMarker = null;
+    }
+    selectedCircleId = null;
+  }
+  pushUndo({ type: 'delete', id: circles[idx].id, index: idx, data: { ...circles[idx].data } });
+  removeDensityOverlay(circles[idx]);
   map.removeLayer(circles[idx].circle);
   map.removeLayer(circles[idx].marker);
   circles.splice(idx, 1);
   renderCircleList();
   updateIntersectionButton();
   clearIntersections();
-  setStatus('Undo: circle removed.', 'info');
+  clearPopulationMarkers();
+  setStatus('Circle deleted. Press Cmd+Z to undo.', 'info');
 }
 
-function undoDelete(action) {
+function removeCircle(action) {
+  const idx = circles.findIndex(c => c.id === action.id);
+  if (idx === -1) return;
+  removeDensityOverlay(circles[idx]);
+  map.removeLayer(circles[idx].circle);
+  map.removeLayer(circles[idx].marker);
+  circles.splice(idx, 1);
+  renderCircleList();
+  updateIntersectionButton();
+  clearIntersections();
+}
+
+function restoreCircle(action) {
   const circle = L.circle([action.data.lat, action.data.lng], {
     radius: action.data.radiusMeters,
     color: action.data.color,
@@ -60,22 +88,28 @@ function undoDelete(action) {
   }).addTo(map);
 
   const insertIdx = Math.min(action.index, circles.length);
-  circles.splice(insertIdx, 0, { id: action.id, circle, marker, data: { ...action.data } });
+  const restoredEntry = { id: action.id, circle, marker, data: { ...action.data } };
+  marker.on('click', () => selectCircle(action.id));
+  circles.splice(insertIdx, 0, restoredEntry);
   renderCircleList();
   updateIntersectionButton();
   clearIntersections();
-  setStatus('Undo: circle restored.', 'info');
 }
 
-function undoMove(action) {
-  const entry = circles.find(c => c.id === action.id);
-  if (!entry) { setStatus('Nothing to undo.', 'info'); return; }
-  entry.circle.setLatLng([action.oldLat, action.oldLng]);
-  entry.marker.setLatLng([action.oldLat, action.oldLng]);
-  entry.data.lat = action.oldLat;
-  entry.data.lng = action.oldLng;
+function moveCircle(entry, lat, lng) {
+  entry.circle.setLatLng([lat, lng]);
+  entry.marker.setLatLng([lat, lng]);
+  entry.data.lat = lat;
+  entry.data.lng = lng;
   clearIntersections();
-  setStatus('Undo: circle moved back.', 'info');
+}
+
+function resizeCircle(entry, radiusMeters) {
+  entry.data.radiusMeters = radiusMeters;
+  entry.circle.setRadius(radiusMeters);
+  entry.data.radiusDisplay = parseFloat(toDisplayUnit(radiusMeters, entry.data.unit).toFixed(2));
+  clearIntersections();
+  clearPopulationMarkers();
 }
 
 function performUndo() {
@@ -84,18 +118,296 @@ function performUndo() {
     return;
   }
   const action = undoStack.pop();
+  redoStack.push(action);
+
   switch (action.type) {
-    case 'add':    undoAdd(action);    break;
-    case 'delete': undoDelete(action); break;
-    case 'move':   undoMove(action);   break;
+    case 'add':
+      if (selectedCircleId === action.id) deselectCircle();
+      removeCircle(action);
+      setStatus('Undo: circle removed.', 'info');
+      break;
+    case 'delete':
+      restoreCircle(action);
+      setStatus('Undo: circle restored.', 'info');
+      break;
+    case 'move': {
+      const entry = circles.find(c => c.id === action.id);
+      if (!entry) { setStatus('Nothing to undo.', 'info'); return; }
+      moveCircle(entry, action.oldLat, action.oldLng);
+      if (entry._dragMarker) entry._dragMarker.setLatLng([action.oldLat, action.oldLng]);
+      renderCircleList();
+      setStatus('Undo: circle moved back.', 'info');
+      break;
+    }
+    case 'resize': {
+      const entry = circles.find(c => c.id === action.id);
+      if (!entry) { setStatus('Nothing to undo.', 'info'); return; }
+      resizeCircle(entry, action.oldRadius);
+      renderCircleList();
+      setStatus('Undo: radius restored.', 'info');
+      break;
+    }
   }
 }
 
-// Selected location from "Use My Location" or "Pick on Map" — skips geocoding when set
+function performRedo() {
+  if (redoStack.length === 0) {
+    setStatus('Nothing to redo.', 'info');
+    return;
+  }
+  const action = redoStack.pop();
+  undoStack.push(action);
+
+  switch (action.type) {
+    case 'add':
+      restoreCircle(action);
+      setStatus('Redo: circle re-added.', 'info');
+      break;
+    case 'delete':
+      if (selectedCircleId === action.id) deselectCircle();
+      removeCircle(action);
+      setStatus('Redo: circle re-deleted.', 'info');
+      break;
+    case 'move': {
+      const entry = circles.find(c => c.id === action.id);
+      if (!entry) { setStatus('Nothing to redo.', 'info'); return; }
+      moveCircle(entry, action.newLat, action.newLng);
+      if (entry._dragMarker) entry._dragMarker.setLatLng([action.newLat, action.newLng]);
+      renderCircleList();
+      setStatus('Redo: circle moved forward.', 'info');
+      break;
+    }
+    case 'resize': {
+      const entry = circles.find(c => c.id === action.id);
+      if (!entry) { setStatus('Nothing to redo.', 'info'); return; }
+      resizeCircle(entry, action.newRadius);
+      renderCircleList();
+      setStatus('Redo: radius changed.', 'info');
+      break;
+    }
+  }
+}
+
+// --- Circle selection ---
+let selectedCircleId = null;
+
+function selectCircle(id) {
+  // Deselect previous
+  if (selectedCircleId !== null) deselectCircle();
+
+  const entry = circles.find(c => c.id === id);
+  if (!entry) return;
+
+  selectedCircleId = id;
+
+  // Highlight circle on map
+  entry.circle.setStyle({ weight: 4, dashArray: '8 4' });
+
+  // Swap L.circleMarker → draggable L.marker
+  map.removeLayer(entry.marker);
+  const dragMarker = L.marker([entry.data.lat, entry.data.lng], {
+    draggable: true,
+    icon: L.divIcon({
+      className: 'preview-center-icon',
+      html: `<div style="
+        width: 14px; height: 14px;
+        background: ${entry.data.color};
+        border: 3px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 0 6px rgba(0,0,0,0.4);
+      "></div>`,
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    }),
+  }).addTo(map);
+
+  dragMarker.on('dragstart', () => {
+    pushUndo({ type: 'move', id: entry.id, oldLat: entry.data.lat, oldLng: entry.data.lng, newLat: entry.data.lat, newLng: entry.data.lng });
+  });
+
+  dragMarker.on('drag', (e) => {
+    const pos = e.target.getLatLng();
+    entry.circle.setLatLng(pos);
+    entry.data.lat = pos.lat;
+    entry.data.lng = pos.lng;
+  });
+
+  dragMarker.on('dragend', async (e) => {
+    const pos = e.target.getLatLng();
+    entry.data.lat = pos.lat;
+    entry.data.lng = pos.lng;
+    // Update undo entry with final position
+    const lastUndo = undoStack[undoStack.length - 1];
+    if (lastUndo && lastUndo.type === 'move' && lastUndo.id === entry.id) {
+      lastUndo.newLat = pos.lat;
+      lastUndo.newLng = pos.lng;
+    }
+    clearIntersections();
+    clearPopulationMarkers();
+    // Reverse geocode new position
+    try {
+      const name = await reverseGeocode(pos.lat, pos.lng);
+      const short = name.split(',').slice(0, 2).join(',').trim();
+      entry.data.displayName = name;
+      entry.data.address = short;
+      renderCircleList();
+      setStatus(`Moved to: ${short}`, 'info');
+    } catch {
+      entry.data.address = `${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)}`;
+      renderCircleList();
+    }
+  });
+
+  entry._dragMarker = dragMarker;
+  renderCircleList();
+}
+
+function deselectCircle() {
+  if (selectedCircleId === null) return;
+
+  const entry = circles.find(c => c.id === selectedCircleId);
+  if (entry) {
+    // Restore circle style
+    entry.circle.setStyle({ weight: 2, dashArray: null });
+
+    // Swap draggable marker back to L.circleMarker
+    if (entry._dragMarker) {
+      map.removeLayer(entry._dragMarker);
+      entry._dragMarker = null;
+    }
+    const marker = L.circleMarker([entry.data.lat, entry.data.lng], {
+      radius: 5,
+      color: entry.data.color,
+      fillColor: entry.data.color,
+      fillOpacity: 1,
+    }).addTo(map);
+    marker.on('click', () => selectCircle(entry.id));
+    entry.marker = marker;
+  }
+
+  selectedCircleId = null;
+  renderCircleList();
+}
+
+function updateCircleRadius(entry, newRadiusMeters) {
+  const oldRadius = entry.data.radiusMeters;
+  if (Math.abs(oldRadius - newRadiusMeters) < 0.1) return;
+
+  pushUndo({ type: 'resize', id: entry.id, oldRadius: oldRadius, newRadius: newRadiusMeters });
+  entry.data.radiusMeters = newRadiusMeters;
+  entry.circle.setRadius(newRadiusMeters);
+
+  const unit = entry.data.unit;
+  entry.data.radiusDisplay = parseFloat(toDisplayUnit(newRadiusMeters, unit).toFixed(2));
+
+  clearIntersections();
+  clearPopulationMarkers();
+}
+
+// --- Color palette for auto-cycling circle colors ---
+const CIRCLE_COLORS = [
+  '#3388ff', // blue
+  '#1a5fb4', // dark blue
+  '#62a0ea', // sky blue
+  '#1c71d8', // strong blue
+  '#99c1f1', // light blue
+  '#26a4e0', // cyan-blue
+  '#1b6ec2', // royal blue
+  '#4dabf7', // medium blue
+  '#0b5394', // navy blue
+  '#74b9ff', // soft blue
+  '#2471a3', // steel blue
+  '#5dade2', // ocean blue
+];
+let nextColorIndex = 0;
+
+function getNextColor() {
+  const color = CIRCLE_COLORS[nextColorIndex % CIRCLE_COLORS.length];
+  nextColorIndex++;
+  return color;
+}
+
 let selectedLocation = null;
 // Pick-on-map state
 let pickMode = false;
 let pickMarker = null;
+
+// --- Recent locations ---
+const MAX_RECENT = 10;
+const RECENT_KEY = 'circle-triangulation-recent-locations';
+
+function loadRecentLocations() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+  } catch { return []; }
+}
+
+function saveRecentLocations(locations) {
+  localStorage.setItem(RECENT_KEY, JSON.stringify(locations));
+}
+
+function addRecentLocation(loc) {
+  // loc: { lat, lng, displayName, shortName }
+  const locations = loadRecentLocations();
+  // Remove duplicate if same coords (within ~10m)
+  const filtered = locations.filter(l =>
+    Math.abs(l.lat - loc.lat) > 0.0001 || Math.abs(l.lng - loc.lng) > 0.0001
+  );
+  filtered.unshift(loc);
+  if (filtered.length > MAX_RECENT) filtered.length = MAX_RECENT;
+  saveRecentLocations(filtered);
+  renderRecentLocations();
+}
+
+function removeRecentLocation(index) {
+  const locations = loadRecentLocations();
+  locations.splice(index, 1);
+  saveRecentLocations(locations);
+  renderRecentLocations();
+}
+
+function renderRecentLocations() {
+  const locations = loadRecentLocations();
+  const container = document.getElementById('recent-locations');
+  const list = document.getElementById('recent-list');
+
+  if (locations.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = '';
+  list.innerHTML = '';
+
+  locations.forEach((loc, i) => {
+    const item = document.createElement('div');
+    item.className = 'recent-item';
+
+    const text = document.createElement('span');
+    text.className = 'recent-text';
+    text.textContent = loc.shortName || loc.displayName;
+    text.title = loc.displayName;
+
+    const del = document.createElement('button');
+    del.className = 'recent-delete';
+    del.innerHTML = '&times;';
+    del.title = 'Remove from history';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeRecentLocation(i);
+    });
+
+    item.addEventListener('click', () => {
+      addressInput.value = loc.shortName || loc.displayName;
+      selectedLocation = { lat: loc.lat, lng: loc.lng, displayName: loc.displayName };
+      setStatus(`Selected: ${loc.shortName || loc.displayName}`, 'info');
+    });
+
+    item.appendChild(text);
+    item.appendChild(del);
+    list.appendChild(item);
+  });
+}
 
 const addressInput = document.getElementById('address');
 const radiusInput = document.getElementById('radius');
@@ -115,6 +427,10 @@ const deleteConfirm = document.getElementById('delete-confirm');
 const deleteCancel = document.getElementById('delete-cancel');
 const myLocationBtn = document.getElementById('my-location-btn');
 const pickMapBtn = document.getElementById('pick-map-btn');
+const analyzePopBtn = document.getElementById('analyze-pop-btn');
+const clearPopBtn = document.getElementById('clear-pop-btn');
+const populationInfoEl = document.getElementById('population-info');
+let populationMarkers = [];
 
 function setStatus(msg, type = 'info') {
   statusEl.textContent = msg;
@@ -306,6 +622,11 @@ pickMapBtn.addEventListener('click', () => {
 });
 
 map.on('click', async (e) => {
+  // Deselect circle when clicking on empty map
+  if (selectedCircleId !== null && !pickMode) {
+    deselectCircle();
+    return;
+  }
   if (!pickMode) return;
   const { lat, lng } = e.latlng;
   placePickMarker(lat, lng);
@@ -360,7 +681,8 @@ previewBtn.addEventListener('click', async () => {
   }
 
   const meters = toMeters(radiusVal, unit);
-  const color = colorInput.value;
+  const color = getNextColor();
+  colorInput.value = color;
 
   // Hide pick marker while preview is showing
   removePickMarker();
@@ -443,6 +765,17 @@ acceptBtn.addEventListener('click', () => {
   if (!previewCircle) return;
   const data = previewCircle._previewData;
 
+  // Prevent duplicate circles (same center + radius)
+  const isDuplicate = circles.some(c =>
+    Math.abs(c.data.lat - data.lat) < 0.0001 &&
+    Math.abs(c.data.lng - data.lng) < 0.0001 &&
+    Math.abs(c.data.radiusMeters - data.radiusMeters) < 1
+  );
+  if (isDuplicate) {
+    setStatus('A circle with this location and radius already exists.', 'error');
+    return;
+  }
+
   map.removeLayer(previewCircle);
   if (previewMarker) map.removeLayer(previewMarker);
 
@@ -462,8 +795,18 @@ acceptBtn.addEventListener('click', () => {
   }).addTo(map);
 
   const id = Date.now();
+  marker.on('click', () => selectCircle(id));
   circles.push({ id, circle, marker, data });
-  pushUndo({ type: 'add', id });
+  pushUndo({ type: 'add', id, index: circles.length - 1, data: { ...data } });
+
+  // Save to recent locations
+  const shortName = data.displayName.split(',').slice(0, 2).join(',').trim();
+  addRecentLocation({
+    lat: data.lat,
+    lng: data.lng,
+    displayName: data.displayName,
+    shortName: shortName,
+  });
 
   previewCircle = null;
   previewMarker = null;
@@ -479,8 +822,112 @@ acceptBtn.addEventListener('click', () => {
   renderCircleList();
   updateIntersectionButton();
   clearIntersections();
+  clearPopulationMarkers();
   setStatus('Circle added!', 'info');
 });
+
+// --- Population density overlay ---
+
+async function fetchAndDrawDensity(entry) {
+  try {
+    const res = await fetch(`${API_BASE}/density/sample-circle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lat: entry.data.lat,
+        lng: entry.data.lng,
+        radius_meters: entry.data.radiusMeters,
+        num_samples: 360,
+      }),
+    });
+
+    if (!res.ok) {
+      setStatus('Circle added. (Population API unavailable)', 'info');
+      return;
+    }
+
+    const result = await res.json();
+    drawDensityOverlay(entry, result.samples, result.max_density);
+    setStatus(`Circle added! ${Math.round(result.populated_ratio * 100)}% of edge is populated.`, 'info');
+  } catch {
+    // Backend not running — silently degrade
+    setStatus('Circle added. (Start backend for population density)', 'info');
+  }
+}
+
+function drawDensityOverlay(entry, samples, maxDensity) {
+  // Remove any previous density overlay for this circle
+  removeDensityOverlay(entry);
+
+  if (!samples || samples.length < 2) return;
+
+  const baseColor = entry.data.color;
+  const overlayLayers = [];
+
+  // Hide the original thin circle line — the overlay replaces it
+  entry.circle.setStyle({ opacity: 0, fillOpacity: 0.04 });
+
+  // Draw per-segment polylines: each segment connects two adjacent sample points
+  // Uninhabited = thin, circle-colored; populated = thick, warm-colored
+  for (let i = 0; i < samples.length; i++) {
+    const s1 = samples[i];
+    const s2 = samples[(i + 1) % samples.length];
+    const avgDensity = (s1.density + s2.density) / 2;
+
+    let weight, color, opacity;
+    if (avgDensity > 0 && maxDensity > 0) {
+      const norm = Math.min(avgDensity / maxDensity, 1);
+      weight = 5 + norm * 9;           // 5–14px
+      color = densityColor(norm);       // orange-red → magenta
+      opacity = 0.85 + norm * 0.15;    // 0.85–1.0
+    } else {
+      weight = 2;
+      color = baseColor;
+      opacity = 0.4;
+    }
+
+    const line = L.polyline([[s1.lat, s1.lng], [s2.lat, s2.lng]], {
+      color: color,
+      weight: weight,
+      opacity: opacity,
+      lineCap: 'butt',
+      lineJoin: 'round',
+    }).addTo(map);
+
+    if (avgDensity > 0) {
+      line.bindPopup(`Density: ${avgDensity.toFixed(1)} people/pixel<br>Lat: ${s1.lat.toFixed(6)}<br>Lng: ${s1.lng.toFixed(6)}`);
+    }
+
+    overlayLayers.push(line);
+  }
+
+  // Store overlay layers on the entry so we can remove them later
+  entry.densityOverlay = overlayLayers;
+}
+
+function removeDensityOverlay(entry) {
+  if (entry.densityOverlay) {
+    entry.densityOverlay.forEach(layer => map.removeLayer(layer));
+    entry.densityOverlay = null;
+    // Restore original circle line
+    entry.circle.setStyle({ opacity: 1, fillOpacity: 0.08 });
+  }
+}
+
+function changeCircleColor(entry, newColor) {
+  entry.data.color = newColor;
+  entry.circle.setStyle({ color: newColor, fillColor: newColor });
+  entry.marker.setStyle({ color: newColor, fillColor: newColor });
+  // Re-draw density overlay with new base color for unpopulated segments
+  if (entry.densityOverlay) {
+    entry.densityOverlay.forEach(layer => {
+      // Only update the thin unpopulated segments (weight=2) to new color
+      if (layer.options.weight === 2) {
+        layer.setStyle({ color: newColor });
+      }
+    });
+  }
+}
 
 function renderCircleList() {
   if (circles.length === 0) {
@@ -489,50 +936,150 @@ function renderCircleList() {
   }
   circleListEl.innerHTML = '';
   circles.forEach(c => {
+    const isSelected = c.id === selectedCircleId;
     const item = document.createElement('div');
-    item.className = 'circle-item';
+    item.className = 'circle-item' + (isSelected ? ' selected' : '');
+
     const label = c.data.address.length > 25
       ? c.data.address.substring(0, 25) + '...'
       : c.data.address;
-    item.innerHTML = `
-      <span class="circle-swatch" style="background:${c.data.color}"></span>
-      <div class="circle-info">
-        <div class="circle-label" title="${c.data.displayName}">${label}</div>
-        <div class="circle-detail">${c.data.radiusDisplay} ${c.data.unit}</div>
-      </div>
-      <button class="delete-btn" data-id="${c.id}" title="Delete circle">&times;</button>
-    `;
-    circleListEl.appendChild(item);
-  });
 
-  circleListEl.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const id = parseInt(e.target.dataset.id);
-      const entry = circles.find(c => c.id === id);
-      if (!entry) return;
-      deleteTarget = id;
-      deleteModalText.textContent = `Delete the circle at "${entry.data.address}" (${entry.data.radiusDisplay} ${entry.data.unit})?`;
-      deleteModal.style.display = 'flex';
+    // Color swatch + hidden picker
+    const swatch = document.createElement('span');
+    swatch.className = 'circle-swatch';
+    swatch.style.background = c.data.color;
+    swatch.title = 'Change color';
+
+    const picker = document.createElement('input');
+    picker.type = 'color';
+    picker.className = 'circle-color-picker';
+    picker.value = c.data.color;
+    picker.addEventListener('input', (e) => {
+      const newColor = e.target.value;
+      changeCircleColor(c, newColor);
+      swatch.style.background = newColor;
+      // Update drag marker if selected
+      if (c._dragMarker) {
+        c._dragMarker.setIcon(L.divIcon({
+          className: 'preview-center-icon',
+          html: `<div style="width:14px;height:14px;background:${newColor};border:3px solid #fff;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.4);"></div>`,
+          iconSize: [14, 14], iconAnchor: [7, 7],
+        }));
+      }
     });
+    picker.addEventListener('change', () => picker.blur());
+
+    swatch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      picker.click();
+    });
+
+    // Info row (clickable to select)
+    const topRow = document.createElement('div');
+    topRow.className = 'circle-top-row';
+
+    const info = document.createElement('div');
+    info.className = 'circle-info';
+    info.innerHTML = `
+      <div class="circle-label" title="${c.data.displayName}">${label}</div>
+      <div class="circle-detail">${c.data.radiusDisplay} ${c.data.unit}</div>
+    `;
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'delete-btn';
+    delBtn.innerHTML = '&times;';
+    delBtn.title = 'Delete circle';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (selectedCircleId === c.id) deselectCircle();
+      deleteCircleById(c.id);
+    });
+
+    topRow.appendChild(swatch);
+    topRow.appendChild(picker);
+    topRow.appendChild(info);
+    topRow.appendChild(delBtn);
+    topRow.addEventListener('click', () => {
+      if (isSelected) {
+        deselectCircle();
+      } else {
+        selectCircle(c.id);
+      }
+    });
+
+    item.appendChild(topRow);
+
+    // Expanded editor when selected
+    if (isSelected) {
+      const editor = document.createElement('div');
+      editor.className = 'circle-editor';
+
+      // Radius + unit row
+      const radiusRow = document.createElement('div');
+      radiusRow.className = 'editor-row';
+
+      const radiusLabel = document.createElement('label');
+      radiusLabel.textContent = 'Radius';
+      radiusLabel.className = 'editor-label';
+
+      const radiusInput = document.createElement('input');
+      radiusInput.type = 'number';
+      radiusInput.className = 'editor-input';
+      radiusInput.value = c.data.radiusDisplay;
+      radiusInput.step = 'any';
+      radiusInput.min = '0';
+
+      const unitSel = document.createElement('select');
+      unitSel.className = 'editor-select';
+      ['mi', 'ft', 'km', 'm'].forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u;
+        opt.textContent = u;
+        if (u === c.data.unit) opt.selected = true;
+        unitSel.appendChild(opt);
+      });
+
+      const applyRadius = () => {
+        const val = parseFloat(radiusInput.value);
+        if (isNaN(val) || val <= 0) return;
+        const newUnit = unitSel.value;
+        c.data.unit = newUnit;
+        const newMeters = toMeters(val, newUnit);
+        updateCircleRadius(c, newMeters);
+      };
+
+      radiusInput.addEventListener('change', applyRadius);
+      unitSel.addEventListener('change', () => {
+        // Convert displayed value to new unit
+        const newUnit = unitSel.value;
+        c.data.unit = newUnit;
+        c.data.radiusDisplay = parseFloat(toDisplayUnit(c.data.radiusMeters, newUnit).toFixed(2));
+        radiusInput.value = c.data.radiusDisplay;
+      });
+
+      // Stop click propagation so editing doesn't toggle selection
+      radiusInput.addEventListener('click', e => e.stopPropagation());
+      unitSel.addEventListener('click', e => e.stopPropagation());
+
+      radiusRow.appendChild(radiusLabel);
+      radiusRow.appendChild(radiusInput);
+      radiusRow.appendChild(unitSel);
+
+      // Coordinates display
+      const coordInfo = document.createElement('div');
+      coordInfo.className = 'editor-hint';
+      coordInfo.textContent = `${c.data.lat.toFixed(5)}, ${c.data.lng.toFixed(5)} — drag marker to move`;
+
+      editor.appendChild(radiusRow);
+      editor.appendChild(coordInfo);
+      item.appendChild(editor);
+    }
+
+    circleListEl.appendChild(item);
   });
 }
 
-deleteConfirm.addEventListener('click', () => {
-  if (deleteTarget == null) return;
-  const idx = circles.findIndex(c => c.id === deleteTarget);
-  if (idx !== -1) {
-    pushUndo({ type: 'delete', id: circles[idx].id, index: idx, data: { ...circles[idx].data } });
-    map.removeLayer(circles[idx].circle);
-    map.removeLayer(circles[idx].marker);
-    circles.splice(idx, 1);
-    renderCircleList();
-    updateIntersectionButton();
-    clearIntersections();
-  }
-  deleteTarget = null;
-  deleteModal.style.display = 'none';
-});
-
+// Modal handlers kept for backward compatibility but modal is no longer shown
 deleteCancel.addEventListener('click', () => {
   deleteTarget = null;
   deleteModal.style.display = 'none';
@@ -540,6 +1087,7 @@ deleteCancel.addEventListener('click', () => {
 
 function updateIntersectionButton() {
   showIntersectionsBtn.disabled = circles.length < 2;
+  analyzePopBtn.disabled = circles.length < 1;
 }
 
 function clearIntersections() {
@@ -620,7 +1168,7 @@ function circleIntersectionPoints(c1lat, c1lng, c1r, c2lat, c2lng, c2r) {
   ];
 }
 
-showIntersectionsBtn.addEventListener('click', () => {
+showIntersectionsBtn.addEventListener('click', async () => {
   clearIntersections();
 
   let totalPoints = 0;
@@ -634,24 +1182,57 @@ showIntersectionsBtn.addEventListener('click', () => {
         a.lat, a.lng, a.radiusMeters,
         b.lat, b.lng, b.radiusMeters
       );
-
-      if (pts.length > 0) {
-        const lineColor = '#ff4444';
-        pts.forEach(pt => {
-          allPoints.push(pt);
-          const m = L.circleMarker([pt.lat, pt.lng], {
-            radius: 7,
-            color: lineColor,
-            fillColor: '#ff4444',
-            fillOpacity: 0.9,
-            weight: 2,
-          }).addTo(map);
-          m.bindPopup(`Intersection<br>Lat: ${pt.lat.toFixed(6)}<br>Lng: ${pt.lng.toFixed(6)}`);
-          intersectionMarkers.push(m);
-          totalPoints++;
-        });
-      }
+      pts.forEach(pt => {
+        allPoints.push(pt);
+        totalPoints++;
+      });
     }
+  }
+
+  if (totalPoints === 0) {
+    intersectionInfoEl.innerHTML = '<p>No intersections found. Circles may not overlap.</p>';
+    return;
+  }
+
+  // Try to enrich with population density from backend
+  let densityData = null;
+  try {
+    const res = await fetch(`${API_BASE}/density/at-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: allPoints }),
+    });
+    if (res.ok) {
+      const result = await res.json();
+      densityData = result.points;
+    }
+  } catch { /* backend unavailable — draw without density */ }
+
+  // Draw intersection markers, sized/colored by density if available
+  for (let i = 0; i < allPoints.length; i++) {
+    const pt = allPoints[i];
+    const density = densityData ? densityData[i].density : null;
+    const hasPopulation = density !== null && density > 0;
+
+    const markerColor = hasPopulation ? '#ff4444' : '#888888';
+    const markerRadius = hasPopulation ? 7 + Math.min(density / 5, 8) : 5;
+    const fillOpacity = hasPopulation ? 0.9 : 0.3;
+
+    const m = L.circleMarker([pt.lat, pt.lng], {
+      radius: markerRadius,
+      color: markerColor,
+      fillColor: markerColor,
+      fillOpacity: fillOpacity,
+      weight: 2,
+    }).addTo(map);
+
+    let popupText = `Intersection<br>Lat: ${pt.lat.toFixed(6)}<br>Lng: ${pt.lng.toFixed(6)}`;
+    if (density !== null) {
+      popupText += `<br>Pop. density: ${density.toFixed(1)} people/pixel`;
+      if (!hasPopulation) popupText += '<br><em>Uninhabited area</em>';
+    }
+    m.bindPopup(popupText);
+    intersectionMarkers.push(m);
   }
 
   if (circles.length >= 3) {
@@ -686,11 +1267,12 @@ showIntersectionsBtn.addEventListener('click', () => {
     });
   }
 
-  if (totalPoints === 0) {
-    intersectionInfoEl.innerHTML = '<p>No intersections found. Circles may not overlap.</p>';
-  } else {
-    intersectionInfoEl.innerHTML = `<p>${totalPoints} intersection point${totalPoints > 1 ? 's' : ''} found.</p>`;
+  const populatedCount = densityData ? densityData.filter(d => d.density > 0).length : null;
+  let infoText = `<p>${totalPoints} intersection point${totalPoints > 1 ? 's' : ''} found.</p>`;
+  if (populatedCount !== null) {
+    infoText += `<p>${populatedCount} in populated areas, ${totalPoints - populatedCount} in uninhabited areas.</p>`;
   }
+  intersectionInfoEl.innerHTML = infoText;
 
   clearIntersectionsBtn.style.display = '';
 });
@@ -734,16 +1316,269 @@ radiusInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') previewBtn.click();
 });
 
+// --- Population Analysis ---
+
+function densityColor(norm) {
+  // Heat-map: orange-red (low) → deep red → bright magenta (high)
+  // Designed to stand out strongly against map tiles
+  // norm is 0..1 (fraction of max density)
+  const r = 255;
+  const g = Math.round(80 * (1 - norm));   // 80→0
+  const b = Math.round(norm * 80);          // 0→80 (adds magenta at high density)
+  return `rgb(${r},${g},${b})`;
+}
+
+function clearPopulationMarkers() {
+  populationMarkers.forEach(m => map.removeLayer(m));
+  populationMarkers = [];
+  // Also clear density overlays on all circles
+  circles.forEach(entry => removeDensityOverlay(entry));
+  populationInfoEl.innerHTML = '';
+  clearPopBtn.style.display = 'none';
+}
+
+analyzePopBtn.addEventListener('click', async () => {
+  clearPopulationMarkers();
+
+  if (circles.length === 0) return;
+
+  analyzePopBtn.disabled = true;
+  setStatus('Analyzing population density...', 'info');
+
+  try {
+    if (circles.length === 1) {
+      // Single circle: sample all points around the edge
+      await analyzeSingleCircle(circles[0]);
+    } else {
+      // Multiple circles: analyze intersection points
+      await analyzeIntersections();
+    }
+  } catch (e) {
+    setStatus('Population analysis failed. Is the backend running? (make backend)', 'error');
+    console.error(e);
+  }
+
+  analyzePopBtn.disabled = false;
+  clearPopBtn.style.display = '';
+});
+
+async function analyzeSingleCircle(entry) {
+  const res = await fetch(`${API_BASE}/density/sample-circle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lat: entry.data.lat,
+      lng: entry.data.lng,
+      radius_meters: entry.data.radiusMeters,
+      num_samples: 720,
+    }),
+  });
+
+  if (!res.ok) throw new Error('API error');
+  const result = await res.json();
+
+  drawDensityOverlay(entry, result.samples, result.max_density);
+
+  const popPercent = Math.round(result.populated_ratio * 100);
+  populationInfoEl.innerHTML = `<p>${popPercent}% of the circle edge crosses populated areas.</p><p>Click on highlighted segments for density details.</p>`;
+  setStatus(`Population analysis complete. ${popPercent}% of edge is populated.`, 'info');
+}
+
+function clusterSamples(samples, distThreshold) {
+  // Simple clustering: group consecutive (by angle) samples
+  if (samples.length === 0) return [];
+  const sorted = [...samples].sort((a, b) => a.angle - b.angle);
+  const clusters = [];
+  let current = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const angleDiff = sorted[i].angle - sorted[i - 1].angle;
+    if (angleDiff < 5) { // within 5 degrees = same cluster
+      current.push(sorted[i]);
+    } else {
+      clusters.push(current);
+      current = [sorted[i]];
+    }
+  }
+  clusters.push(current);
+
+  // Merge first and last cluster if they wrap around 360°
+  if (clusters.length > 1) {
+    const firstStart = clusters[0][0].angle;
+    const lastEnd = clusters[clusters.length - 1][clusters[clusters.length - 1].length - 1].angle;
+    if ((360 - lastEnd + firstStart) < 5) {
+      clusters[0] = clusters[clusters.length - 1].concat(clusters[0]);
+      clusters.pop();
+    }
+  }
+
+  return clusters;
+}
+
+async function analyzeIntersections() {
+  // Compute all intersection points
+  const allPoints = [];
+  for (let i = 0; i < circles.length; i++) {
+    for (let j = i + 1; j < circles.length; j++) {
+      const a = circles[i].data;
+      const b = circles[j].data;
+      const pts = circleIntersectionPoints(
+        a.lat, a.lng, a.radiusMeters,
+        b.lat, b.lng, b.radiusMeters
+      );
+      allPoints.push(...pts);
+    }
+  }
+
+  if (allPoints.length === 0) {
+    populationInfoEl.innerHTML = '<p>No intersections found. Circles may not overlap.</p>';
+    setStatus('No intersections to analyze.', 'info');
+    return;
+  }
+
+  // Query density at intersection points
+  const res = await fetch(`${API_BASE}/density/at-points`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ points: allPoints }),
+  });
+
+  if (!res.ok) throw new Error('API error');
+  const result = await res.json();
+
+  const maxDensity = Math.max(...result.points.map(p => p.density), 0.001);
+  let populatedCount = 0;
+
+  for (const pt of result.points) {
+    const isPopulated = pt.density > 0;
+    if (isPopulated) populatedCount++;
+
+    const norm = pt.density / maxDensity;
+    const color = isPopulated ? densityColor(norm) : '#888888';
+    const radius = isPopulated ? 8 + norm * 10 : 5;
+    const opacity = isPopulated ? 0.4 + norm * 0.6 : 0.2;
+
+    const m = L.circleMarker([pt.lat, pt.lng], {
+      radius: radius,
+      color: color,
+      fillColor: color,
+      fillOpacity: opacity,
+      weight: 2,
+    }).addTo(map);
+
+    let popup = `Lat: ${pt.lat.toFixed(6)}<br>Lng: ${pt.lng.toFixed(6)}`;
+    if (isPopulated) {
+      popup = `<strong>Populated intersection</strong><br>Density: ${pt.density.toFixed(1)} people/pixel<br>${popup}`;
+    } else {
+      popup = `<em>Uninhabited intersection</em><br>${popup}`;
+    }
+    m.bindPopup(popup);
+    populationMarkers.push(m);
+  }
+
+  populationInfoEl.innerHTML = `<p>${allPoints.length} intersection point${allPoints.length > 1 ? 's' : ''} analyzed.</p><p><strong>${populatedCount} in populated areas</strong>, ${allPoints.length - populatedCount} in uninhabited areas.</p>`;
+  setStatus(`Population analysis complete. ${populatedCount}/${allPoints.length} intersections are populated.`, 'info');
+}
+
+clearPopBtn.addEventListener('click', () => {
+  clearPopulationMarkers();
+  clearStatus();
+});
+
+// --- Dev Tools ---
+
+function addCircleDirect(lat, lng, radiusMeters, color, address) {
+  // Skip if duplicate
+  const isDuplicate = circles.some(c =>
+    Math.abs(c.data.lat - lat) < 0.0001 &&
+    Math.abs(c.data.lng - lng) < 0.0001 &&
+    Math.abs(c.data.radiusMeters - radiusMeters) < 1
+  );
+  if (isDuplicate) return null;
+
+  const circle = L.circle([lat, lng], {
+    radius: radiusMeters,
+    color: color,
+    fillColor: color,
+    fillOpacity: 0.08,
+    weight: 2,
+  }).addTo(map);
+
+  const marker = L.circleMarker([lat, lng], {
+    radius: 5,
+    color: color,
+    fillColor: color,
+    fillOpacity: 1,
+  }).addTo(map);
+
+  const unit = unitSelect.value;
+  const radiusDisplay = parseFloat(toDisplayUnit(radiusMeters, unit).toFixed(2));
+  const id = Date.now() + Math.random();
+  marker.on('click', () => selectCircle(id));
+  const data = {
+    lat, lng, radiusMeters, color, address,
+    displayName: address,
+    radiusDisplay, unit,
+  };
+  circles.push({ id, circle, marker, data });
+  pushUndo({ type: 'add', id, index: circles.length - 1, data: { ...data } });
+  return id;
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('#dev-add-test, #dev-clear-all');
+  if (!btn) return;
+
+  if (btn.id === 'dev-add-test') {
+    const bounds = map.getBounds();
+    const cLat = bounds.getCenter().lat;
+    const cLng = bounds.getCenter().lng;
+
+    const latSpan = bounds.getNorth() - bounds.getSouth();
+    const lngSpan = bounds.getEast() - bounds.getWest();
+    const offset = lngSpan * 0.15;
+
+    const R = 6371000;
+    const viewMeters = (latSpan * Math.PI / 180) * R;
+    const radius = viewMeters * 0.25;
+
+    const c1 = getNextColor();
+    const c2 = getNextColor();
+
+    addCircleDirect(cLat, cLng - offset, radius, c1, `Test A (${cLat.toFixed(2)}, ${(cLng - offset).toFixed(2)})`);
+    addCircleDirect(cLat, cLng + offset, radius, c2, `Test B (${cLat.toFixed(2)}, ${(cLng + offset).toFixed(2)})`);
+
+    renderCircleList();
+    updateIntersectionButton();
+    clearIntersections();
+    clearPopulationMarkers();
+    setStatus('Added 2 test circles.', 'info');
+  }
+
+  if (btn.id === 'dev-clear-all') {
+    while (circles.length > 0) {
+      const entry = circles.pop();
+      removeDensityOverlay(entry);
+      map.removeLayer(entry.circle);
+      map.removeLayer(entry.marker);
+    }
+    renderCircleList();
+    updateIntersectionButton();
+    clearIntersections();
+    clearPopulationMarkers();
+    setStatus('All circles cleared.', 'info');
+  }
+});
+
 // --- Global keyboard shortcuts ---
 document.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName;
   const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-  const modalOpen = deleteModal.style.display === 'flex';
 
-  // Escape: close modal or cancel preview (works even in inputs)
+  // Escape: deselect circle, or cancel preview (works even in inputs)
   if (e.key === 'Escape') {
-    if (modalOpen) {
-      deleteCancel.click();
+    if (selectedCircleId !== null) {
+      deselectCircle();
     } else if (previewCircle) {
       cancelBtn.click();
     }
@@ -753,9 +1588,15 @@ document.addEventListener('keydown', (e) => {
   // Don't intercept shortcuts while typing in inputs
   if (inInput) return;
 
+  // Cmd+Shift+Z / Ctrl+Shift+Z or Ctrl+Y: redo
+  if ((e.metaKey || e.ctrlKey) && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) {
+    e.preventDefault();
+    performRedo();
+    return;
+  }
+
   // Cmd+Z / Ctrl+Z: undo
   if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-    if (modalOpen) return;
     e.preventDefault();
     performUndo();
     return;
@@ -768,3 +1609,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 });
+
+// --- Init ---
+renderRecentLocations();

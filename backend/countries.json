@@ -1,0 +1,64 @@
+{
+  "_comment": "Countries safe for US citizen travel + at least somewhat LGBT-accepting. Homosexuality legal in all listed. ISO3 codes used for WorldPop downloads.",
+  "countries": [
+    {"iso3": "USA", "name": "United States", "region": "North America"},
+    {"iso3": "CAN", "name": "Canada", "region": "North America"},
+    {"iso3": "MEX", "name": "Mexico", "region": "North America"},
+
+    {"iso3": "CRI", "name": "Costa Rica", "region": "Central America"},
+
+    {"iso3": "ARG", "name": "Argentina", "region": "South America"},
+    {"iso3": "BRA", "name": "Brazil", "region": "South America"},
+    {"iso3": "CHL", "name": "Chile", "region": "South America"},
+    {"iso3": "COL", "name": "Colombia", "region": "South America"},
+    {"iso3": "ECU", "name": "Ecuador", "region": "South America"},
+    {"iso3": "URY", "name": "Uruguay", "region": "South America"},
+    {"iso3": "PER", "name": "Peru", "region": "South America"},
+
+    {"iso3": "GBR", "name": "United Kingdom", "region": "Europe"},
+    {"iso3": "FRA", "name": "France", "region": "Europe"},
+    {"iso3": "DEU", "name": "Germany", "region": "Europe"},
+    {"iso3": "ESP", "name": "Spain", "region": "Europe"},
+    {"iso3": "PRT", "name": "Portugal", "region": "Europe"},
+    {"iso3": "ITA", "name": "Italy", "region": "Europe"},
+    {"iso3": "NLD", "name": "Netherlands", "region": "Europe"},
+    {"iso3": "BEL", "name": "Belgium", "region": "Europe"},
+    {"iso3": "LUX", "name": "Luxembourg", "region": "Europe"},
+    {"iso3": "AUT", "name": "Austria", "region": "Europe"},
+    {"iso3": "CHE", "name": "Switzerland", "region": "Europe"},
+    {"iso3": "IRL", "name": "Ireland", "region": "Europe"},
+    {"iso3": "DNK", "name": "Denmark", "region": "Europe"},
+    {"iso3": "NOR", "name": "Norway", "region": "Europe"},
+    {"iso3": "SWE", "name": "Sweden", "region": "Europe"},
+    {"iso3": "FIN", "name": "Finland", "region": "Europe"},
+    {"iso3": "ISL", "name": "Iceland", "region": "Europe"},
+    {"iso3": "MLT", "name": "Malta", "region": "Europe"},
+    {"iso3": "CZE", "name": "Czech Republic", "region": "Europe"},
+    {"iso3": "EST", "name": "Estonia", "region": "Europe"},
+    {"iso3": "SVN", "name": "Slovenia", "region": "Europe"},
+    {"iso3": "HRV", "name": "Croatia", "region": "Europe"},
+    {"iso3": "GRC", "name": "Greece", "region": "Europe"},
+    {"iso3": "CYP", "name": "Cyprus", "region": "Europe"},
+    {"iso3": "MNE", "name": "Montenegro", "region": "Europe"},
+    {"iso3": "AND", "name": "Andorra", "region": "Europe"},
+
+    {"iso3": "ISR", "name": "Israel", "region": "Middle East"},
+
+    {"iso3": "JPN", "name": "Japan", "region": "Asia"},
+    {"iso3": "KOR", "name": "South Korea", "region": "Asia"},
+    {"iso3": "TWN", "name": "Taiwan", "region": "Asia"},
+    {"iso3": "THA", "name": "Thailand", "region": "Asia"},
+    {"iso3": "PHL", "name": "Philippines", "region": "Asia"},
+    {"iso3": "KHM", "name": "Cambodia", "region": "Asia"},
+    {"iso3": "VNM", "name": "Vietnam", "region": "Asia"},
+    {"iso3": "NPL", "name": "Nepal", "region": "Asia"},
+    {"iso3": "IND", "name": "India", "region": "Asia"},
+
+    {"iso3": "AUS", "name": "Australia", "region": "Oceania"},
+    {"iso3": "NZL", "name": "New Zealand", "region": "Oceania"},
+
+    {"iso3": "ZAF", "name": "South Africa", "region": "Africa"},
+    {"iso3": "CPV", "name": "Cape Verde", "region": "Africa"},
+    {"iso3": "MOZ", "name": "Mozambique", "region": "Africa"}
+  ]
+}

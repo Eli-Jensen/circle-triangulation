@@ -1,0 +1,10 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Population raster data (too large for git)
+backend/data/population/*.tif
+
+# OS
+.DS_Store
