@@ -1883,149 +1883,145 @@ async function showTwoPointCorridor(coords) {
   const maxTimeA = meetPoints[0].data.maxDriveMinutes ? meetPoints[0].data.maxDriveMinutes * 60 : Infinity;
   const maxTimeB = meetPoints[1].data.maxDriveMinutes ? meetPoints[1].data.maxDriveMinutes * 60 : Infinity;
 
-  // Step 1: Get full route
+  // Step 1: Get route A→B and routes to midpoint
   meetInfoEl.innerHTML = '<p>Fetching route...</p>';
   const route = await osrmRoute(a, b);
+  const mid = pointAlongRoute(route, 0.5);
 
-  // Step 2: Sample points along route
-  const NUM_SAMPLES = 50;
-  const samplePoints = [];
-  for (let i = 0; i <= NUM_SAMPLES; i++) {
-    samplePoints.push(pointAlongRoute(route, i / NUM_SAMPLES));
-  }
-
-  // Step 3: Get time matrix
+  // Get routes from each end to midpoint for accurate times
   meetInfoEl.innerHTML = '<p>Computing drive times...</p>';
-  const timeMatrix = await osrmTableForCorridor(a, b, samplePoints);
+  const [routeA, routeB] = await Promise.all([
+    osrmRoute(a, mid),
+    osrmRoute(b, mid),
+  ]);
 
-  // Step 4: Get population density
-  meetInfoEl.innerHTML = '<p>Checking population density...</p>';
-  const densities = await fetchDensitiesAtPoints(samplePoints);
+  // Check time limits
+  const midReachableA = maxTimeA === Infinity || routeA.duration <= maxTimeA;
+  const midReachableB = maxTimeB === Infinity || routeB.duration <= maxTimeB;
 
-  // Step 5: Render
-  renderCorridor(route, samplePoints, timeMatrix, densities, maxTimeA, maxTimeB);
-}
-
-function renderCorridor(route, samplePoints, timeMatrix, densities, maxTimeA, maxTimeB) {
-  const { fromA, fromB } = timeMatrix;
-  const maxDensity = Math.max(...densities, 0.001);
-
-  // Build per-sample-point data
-  const sampleData = samplePoints.map((pt, i) => {
-    const timeA = fromA[i];
-    const timeB = fromB[i];
-    const density = densities[i];
-
-    const reachableA = timeA !== null && timeA <= maxTimeA;
-    const reachableB = timeB !== null && timeB <= maxTimeB;
-    const reachable = reachableA && reachableB;
-
-    // Equi-time score: 1.0 = perfectly equal, lower = more unbalanced
-    const minTime = Math.min(timeA || 0, timeB || 0);
-    const maxTime = Math.max(timeA || 1, timeB || 1);
-    const equiScore = maxTime > 0 ? minTime / maxTime : 0;
-
-    // Fade near time limits (1.0 = comfortably within, 0.0 = at boundary)
-    let fadeFactor = 1.0;
-    if (maxTimeA < Infinity) {
-      const ratioA = timeA / maxTimeA;
-      if (ratioA > 0.8) fadeFactor = Math.min(fadeFactor, (1.0 - ratioA) / 0.2);
-    }
-    if (maxTimeB < Infinity) {
-      const ratioB = timeB / maxTimeB;
-      if (ratioB > 0.8) fadeFactor = Math.min(fadeFactor, (1.0 - ratioB) / 0.2);
-    }
-    fadeFactor = Math.max(fadeFactor, 0);
-
-    return { pt, timeA, timeB, density, reachable, equiScore, fadeFactor };
-  });
-
-  // Find sweet spot: best combination of equi-time + density
-  let bestIdx = 0;
-  let bestScore = -1;
-  sampleData.forEach((d, i) => {
-    if (!d.reachable) return;
-    const densityNorm = d.density / maxDensity;
-    const score = d.equiScore * 0.6 + densityNorm * 0.4;
-    if (score > bestScore) { bestScore = score; bestIdx = i; }
-  });
-
-  // Draw faint base route line
+  // Step 2: Draw the route as two colored halves
   const fullRouteLatLngs = routeToLatLngs(route);
-  const baseLine = L.polyline(fullRouteLatLngs, {
-    color: '#9ca3af', weight: 2, opacity: 0.3, dashArray: '4,4',
+  const routeALatLngs = routeToLatLngs(routeA);
+  const routeBLatLngs = routeToLatLngs(routeB);
+
+  const lineA = L.polyline(routeALatLngs, {
+    color: meetPoints[0].data.color, weight: 4, opacity: 0.7,
   }).addTo(map);
-  meetLines.push(baseLine);
+  meetLines.push(lineA);
 
-  // Draw density-colored segments
-  for (let i = 0; i < samplePoints.length - 1; i++) {
-    const d = sampleData[i];
-    const dNext = sampleData[i + 1];
-    const avgDensity = (d.density + dNext.density) / 2;
-    const avgFade = (d.fadeFactor + dNext.fadeFactor) / 2;
-    const reachable = d.reachable && dNext.reachable;
+  const lineB = L.polyline(routeBLatLngs, {
+    color: meetPoints[1].data.color, weight: 4, opacity: 0.7,
+  }).addTo(map);
+  meetLines.push(lineB);
 
-    let color, weight, opacity;
-    if (!reachable) {
-      color = '#d1d5db'; weight = 2; opacity = 0.2;
-    } else if (avgDensity > 0 && maxDensity > 0) {
-      const norm = Math.min(avgDensity / maxDensity, 1);
-      color = densityColor(norm);
-      weight = 5 + norm * 9;
-      opacity = 0.5 + avgFade * 0.5;
-    } else {
-      color = '#9ca3af'; weight = 3; opacity = 0.3 + avgFade * 0.3;
-    }
+  // Step 3: Draw search circle around midpoint and find populated areas
+  const SEARCH_RADIUS_M = 8000; // 8 km search radius
+  const searchCircle = L.circle([mid.lat, mid.lng], {
+    radius: SEARCH_RADIUS_M,
+    color: '#f59e0b', fillColor: '#f59e0b',
+    fillOpacity: 0.06, weight: 2, dashArray: '8,6', opacity: 0.5,
+  }).addTo(map);
+  meetLines.push(searchCircle);
 
-    const segment = L.polyline(
-      [[d.pt.lat, d.pt.lng], [dNext.pt.lat, dNext.pt.lng]],
-      { color, weight, opacity, lineCap: 'round', lineJoin: 'round' }
-    ).addTo(map);
+  // Step 4: Sample population density within the search circle
+  meetInfoEl.innerHTML = '<p>Scanning for populated areas...</p>';
+  const gridPoints = generateCircleGrid(mid.lat, mid.lng, SEARCH_RADIUS_M, 100);
+  const densities = await fetchDensitiesAtPoints(gridPoints);
 
-    if (avgDensity > 0 && reachable) {
-      segment.bindPopup(
-        `<strong>Population:</strong> ${avgDensity.toFixed(1)}<br>` +
-        `${meetPoints[0].data.address}: ${formatDuration(d.timeA)}<br>` +
-        `${meetPoints[1].data.address}: ${formatDuration(d.timeB)}`
-      );
-    }
-    meetLines.push(segment);
-  }
+  // Pair points with densities and sort by density descending
+  const scoredPoints = gridPoints.map((pt, i) => ({
+    lat: pt.lat, lng: pt.lng, density: densities[i],
+  })).filter(p => p.density > 0).sort((a, b) => b.density - a.density);
 
-  // Place sweet-spot marker
-  const sweet = sampleData[bestIdx];
-  if (sweet && sweet.reachable) {
-    const midIcon = L.divIcon({
-      className: '', html: '<div class="sweetspot-icon">&#x2605;</div>',
-      iconSize: [32, 32], iconAnchor: [16, 16],
-    });
-    meetMidMarker = L.marker([sweet.pt.lat, sweet.pt.lng], { icon: midIcon }).addTo(map);
-    const mode = modeLabel();
-    meetMidMarker.bindPopup(
-      `<strong>Suggested meeting area</strong><br>` +
-      `<small>${meetPoints[0].data.address}: ${formatDuration(sweet.timeA)}</small><br>` +
-      `<small>${meetPoints[1].data.address}: ${formatDuration(sweet.timeB)}</small><br>` +
-      (sweet.density > 0 ? `<small>Pop. density: ${sweet.density.toFixed(1)}</small>` : '<small>Low population area</small>')
-    ).openPopup();
-  }
+  // Show top populated areas as markers
+  const maxDensity = scoredPoints.length > 0 ? scoredPoints[0].density : 1;
+  const topSpots = scoredPoints.slice(0, 8); // top 8
 
+  topSpots.forEach((spot, i) => {
+    const norm = Math.min(spot.density / maxDensity, 1);
+    const radius = 8 + norm * 10; // 8-18px
+    const m = L.circleMarker([spot.lat, spot.lng], {
+      radius, color: densityColor(norm), fillColor: densityColor(norm),
+      fillOpacity: 0.7 + norm * 0.25, weight: 2,
+    }).addTo(map);
+    const distFromMid = haversineDistance(mid.lat, mid.lng, spot.lat, spot.lng);
+    m.bindPopup(
+      `<strong>#${i + 1} populated area</strong><br>` +
+      `<small>Density: ${spot.density.toFixed(1)} people/pixel</small><br>` +
+      `<small>${formatDistance(distFromMid)} from midpoint</small>`
+    );
+    meetLines.push(m);
+  });
+
+  // Step 5: Place sweet-spot marker at the midpoint
+  const midIcon = L.divIcon({
+    className: '', html: '<div class="sweetspot-icon">&#x2605;</div>',
+    iconSize: [32, 32], iconAnchor: [16, 16],
+  });
+  meetMidMarker = L.marker([mid.lat, mid.lng], { icon: midIcon }).addTo(map);
+  meetMidMarker.bindPopup(
+    `<strong>Equi-time meeting point</strong><br>` +
+    `<small>${meetPoints[0].data.address}: ${formatDuration(routeA.duration)} (${formatDistance(routeA.distance)})</small><br>` +
+    `<small>${meetPoints[1].data.address}: ${formatDuration(routeB.duration)} (${formatDistance(routeB.distance)})</small><br>` +
+    (topSpots.length > 0
+      ? `<small>${topSpots.length} populated area${topSpots.length > 1 ? 's' : ''} nearby</small>`
+      : '<small>No population data available</small>')
+  ).openPopup();
+
+  // Fit map to route
   map.fitBounds(L.latLngBounds(fullRouteLatLngs).pad(0.15));
   document.getElementById('meet-disclaimer').style.display = '';
 
   // Sidebar info
-  const reachableCount = sampleData.filter(d => d.reachable).length;
-  const populatedReachable = sampleData.filter(d => d.reachable && d.density > 0).length;
   const mode = modeLabel();
-  meetInfoEl.innerHTML = `
-    <p><strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} corridor</strong></p>
-    ${sweet && sweet.reachable ? `
-      <p><strong>Suggested meeting area:</strong></p>
-      <p>${meetPoints[0].data.address}: <strong>${formatDuration(sweet.timeA)}</strong></p>
-      <p>${meetPoints[1].data.address}: <strong>${formatDuration(sweet.timeB)}</strong></p>
-    ` : '<p>No reachable overlap — try increasing time limits.</p>'}
-    <p class="help-text">${populatedReachable} of ${reachableCount} reachable points are populated.</p>
+  let sidebarHtml = `
+    <p><strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} meeting point</strong></p>
+    <p>${meetPoints[0].data.address}: <strong>${formatDuration(routeA.duration)}</strong> (${formatDistance(routeA.distance)})</p>
+    <p>${meetPoints[1].data.address}: <strong>${formatDuration(routeB.duration)}</strong> (${formatDistance(routeB.distance)})</p>
   `;
+
+  if (!midReachableA || !midReachableB) {
+    sidebarHtml += `<p class="help-text" style="color:#dc3545">Midpoint exceeds a participant's max drive time.</p>`;
+  }
+
+  if (topSpots.length > 0) {
+    sidebarHtml += `<p><strong>${topSpots.length} populated area${topSpots.length > 1 ? 's' : ''}</strong> within ${formatDistance(SEARCH_RADIUS_M)} of the midpoint:</p>`;
+    topSpots.slice(0, 3).forEach((spot, i) => {
+      const dist = haversineDistance(mid.lat, mid.lng, spot.lat, spot.lng);
+      sidebarHtml += `<p class="help-text">#${i + 1}: density ${spot.density.toFixed(0)}, ${formatDistance(dist)} away</p>`;
+    });
+    if (topSpots.length > 3) {
+      sidebarHtml += `<p class="help-text">+ ${topSpots.length - 3} more (click markers on map)</p>`;
+    }
+  } else {
+    sidebarHtml += `<p class="help-text">No population data in search area. Start the backend for density analysis.</p>`;
+  }
+
+  meetInfoEl.innerHTML = sidebarHtml;
   meetClearBtn.style.display = '';
+}
+
+// Generate a grid of points within a circle
+function generateCircleGrid(centerLat, centerLng, radiusM, numPoints) {
+  const points = [];
+  const R = 6371000;
+  // Approximate number of rows/cols for a square grid
+  const gridSize = Math.ceil(Math.sqrt(numPoints));
+  const latDelta = (radiusM / R) * (180 / Math.PI);
+  const lngDelta = latDelta / Math.cos(centerLat * Math.PI / 180);
+
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      const lat = centerLat - latDelta + (2 * latDelta * row) / (gridSize - 1);
+      const lng = centerLng - lngDelta + (2 * lngDelta * col) / (gridSize - 1);
+      // Only include points within the circle
+      const dist = haversineDistance(centerLat, centerLng, lat, lng);
+      if (dist <= radiusM) {
+        points.push({ lat, lng });
+      }
+    }
+  }
+  return points;
 }
 
 // --- Three+ Participant Isochrone Region ---
