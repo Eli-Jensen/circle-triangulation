@@ -1548,7 +1548,7 @@ function addCircleDirect(lat, lng, radiusMeters, color, address) {
 }
 
 document.addEventListener('click', (e) => {
-  const btn = e.target.closest('#dev-add-test, #dev-clear-all');
+  const btn = e.target.closest('#dev-add-test, #dev-clear-all, #dev-meet-2, #dev-meet-3, #dev-meet-clear');
   if (!btn) return;
 
   if (btn.id === 'dev-add-test') {
@@ -1589,6 +1589,47 @@ document.addEventListener('click', (e) => {
     clearIntersections();
     clearPopulationMarkers();
     setStatus('All circles cleared.', 'info');
+  }
+
+  // Dev: add random meeting points and auto-find
+  if (btn.id === 'dev-meet-2' || btn.id === 'dev-meet-3') {
+    // Clear existing meeting points
+    while (meetPoints.length > 0) removeMeetPoint(meetPoints[0].id);
+    clearMeetResult();
+
+    const bounds = map.getBounds();
+    const cLat = bounds.getCenter().lat;
+    const cLng = bounds.getCenter().lng;
+    const latSpan = bounds.getNorth() - bounds.getSouth();
+    const lngSpan = bounds.getEast() - bounds.getWest();
+
+    const count = btn.id === 'dev-meet-3' ? 3 : 2;
+    // Spread points across the visible map with some randomness
+    const angles = count === 2
+      ? [Math.PI, 0] // left and right
+      : [Math.PI * 5/6, Math.PI * 1/6, Math.PI * 3/2]; // triangle
+
+    for (let i = 0; i < count; i++) {
+      const angle = angles[i] + (Math.random() - 0.5) * 0.4;
+      const dist = 0.25 + Math.random() * 0.1;
+      const lat = cLat + latSpan * dist * Math.sin(angle);
+      const lng = cLng + lngSpan * dist * Math.cos(angle);
+      addMeetPoint(lat, lng, `Test ${String.fromCharCode(65 + i)} (${lat.toFixed(3)}, ${lng.toFixed(3)})`);
+    }
+
+    // Open the meeting point tray if closed
+    document.getElementById('tray-meeting').open = true;
+
+    setStatus(`Added ${count} test meeting points. Click "Find Meeting Point" to search.`, 'info');
+
+    // Auto-trigger the meeting point search
+    showMeetingPoint();
+  }
+
+  if (btn.id === 'dev-meet-clear') {
+    while (meetPoints.length > 0) removeMeetPoint(meetPoints[0].id);
+    clearMeetResult();
+    setStatus('Meeting points cleared.', 'info');
   }
 });
 
