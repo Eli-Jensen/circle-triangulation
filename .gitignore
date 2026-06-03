@@ -6,5 +6,9 @@ __pycache__/
 # Population raster data (too large for git)
 backend/data/population/*.tif
 
+# OSM data files (downloaded by import_osm.py)
+backend/data/osm/*.pbf
+backend/data/osm/*.osm
+
 # OS
 .DS_Store

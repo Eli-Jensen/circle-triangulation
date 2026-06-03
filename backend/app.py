@@ -1,25 +1,35 @@
 #!/usr/bin/env python3
-"""FastAPI backend for population density sampling."""
+"""FastAPI backend for population density sampling and geo queries."""
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import db
 from density import raster_index
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load raster data on startup, close on shutdown."""
+    """Load raster data and database pool on startup, close on shutdown."""
     raster_index.load()
+    try:
+        await db.init_pool()
+        logger.info("Database pool initialized")
+    except Exception as e:
+        logger.warning(f"Database not available (routing/POI features disabled): {e}")
     yield
+    await db.close_pool()
     raster_index.close()
 
 
-app = FastAPI(title="Population Density API", lifespan=lifespan)
+app = FastAPI(title="Circle Triangulation API", lifespan=lifespan)
 
 # Allow the frontend (served on a different port) to call us
 app.add_middleware(
@@ -141,5 +151,87 @@ async def list_rasters():
                 },
             }
             for r in raster_index.rasters
+        ],
+    }
+
+
+# --- Database-backed endpoints ---
+
+
+@app.get("/db/health")
+async def db_health():
+    """Check database connectivity and data counts."""
+    if not db.pool:
+        return {"status": "unavailable", "message": "Database not connected"}
+    try:
+        row = await db.fetch_one(
+            "SELECT "
+            "(SELECT count(*) FROM pois) AS poi_count, "
+            "(SELECT count(*) FROM information_schema.tables "
+            "  WHERE table_name = 'ways') AS has_ways"
+        )
+        result = {"status": "ok", "poi_count": row["poi_count"]}
+        if row["has_ways"]:
+            way_row = await db.fetch_one("SELECT count(*) AS cnt FROM ways")
+            result["way_count"] = way_row["cnt"]
+        return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+class NearbyPOIRequest(BaseModel):
+    lat: float
+    lng: float
+    radius_meters: float = Field(default=500, ge=50, le=5000)
+    categories: list[str] | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+@app.post("/pois/nearby")
+async def pois_nearby(req: NearbyPOIRequest):
+    """Find POIs near a point. Categories filter by amenity type."""
+    if not db.pool:
+        return {"error": "Database not connected", "pois": []}
+
+    category_filter = ""
+    params = [req.lng, req.lat, req.radius_meters, req.limit]
+    if req.categories:
+        placeholders = ", ".join(f"${i+5}" for i in range(len(req.categories)))
+        category_filter = f"AND amenity IN ({placeholders})"
+        params.extend(req.categories)
+
+    query = f"""
+        SELECT osm_id, name, amenity, cuisine, phone, website, opening_hours,
+               addr_street, addr_housenumber, addr_city,
+               ST_Y(geom) AS lat, ST_X(geom) AS lng,
+               ST_Distance(geom::geography,
+                           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_m
+        FROM pois
+        WHERE ST_DWithin(geom::geography,
+                         ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+                         $3)
+          {category_filter}
+        ORDER BY distance_m
+        LIMIT $4
+    """
+
+    rows = await db.fetch_all(query, *params)
+    return {
+        "count": len(rows),
+        "pois": [
+            {
+                "osm_id": r["osm_id"],
+                "name": r["name"],
+                "amenity": r["amenity"],
+                "cuisine": r["cuisine"],
+                "phone": r["phone"],
+                "website": r["website"],
+                "opening_hours": r["opening_hours"],
+                "address": " ".join(filter(None, [r["addr_housenumber"], r["addr_street"], r["addr_city"]])),
+                "lat": float(r["lat"]),
+                "lng": float(r["lng"]),
+                "distance_m": round(float(r["distance_m"]), 1),
+            }
+            for r in rows
         ],
     }

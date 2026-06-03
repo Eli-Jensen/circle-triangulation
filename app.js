@@ -622,6 +622,28 @@ pickMapBtn.addEventListener('click', () => {
 });
 
 map.on('click', async (e) => {
+  // Meeting point pick mode takes priority
+  if (meetPickMode) {
+    const { lat, lng } = e.latlng;
+    disableMeetPickMode();
+    let name = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    addMeetPoint(lat, lng, name);
+    try {
+      // Update the name with a reverse geocode
+      const fullName = await reverseGeocode(lat, lng);
+      const pt = meetPoints[meetPoints.length - 1];
+      if (pt) {
+        pt.data.displayName = fullName;
+        pt.data.address = fullName.split(',').slice(0, 3).join(',').trim();
+        pt.marker.setPopupContent(
+          `<strong>${pt.data.address}</strong><br><small>${lat.toFixed(5)}, ${lng.toFixed(5)}</small>`
+        );
+        renderMeetList();
+      }
+    } catch { /* keep coordinate fallback */ }
+    return;
+  }
+
   // Deselect circle when clicking on empty map
   if (selectedCircleId !== null && !pickMode) {
     deselectCircle();
@@ -1570,14 +1592,341 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// --- Meeting Point Feature ---
+
+const meetPoints = [];
+let meetLines = [];
+let meetMidMarker = null;
+let meetPickMode = false;
+let meetPickMarker = null;
+
+const MEET_POINT_COLORS = [
+  '#10b981', '#059669', '#34d399', '#047857', '#6ee7b7', '#065f46',
+];
+let meetColorIndex = 0;
+function getNextMeetColor() {
+  const c = MEET_POINT_COLORS[meetColorIndex % MEET_POINT_COLORS.length];
+  meetColorIndex++;
+  return c;
+}
+
+const meetAddressInput = document.getElementById('meet-address');
+const meetLocationBtn = document.getElementById('meet-location-btn');
+const meetPickBtn = document.getElementById('meet-pick-btn');
+const meetAddBtn = document.getElementById('meet-add-btn');
+const meetFindBtn = document.getElementById('meet-find-btn');
+const meetClearBtn = document.getElementById('meet-clear-btn');
+const meetListEl = document.getElementById('meet-list');
+const meetInfoEl = document.getElementById('meet-info');
+
+function addMeetPoint(lat, lng, displayName) {
+  const color = getNextMeetColor();
+  const marker = L.circleMarker([lat, lng], {
+    radius: 7,
+    color: color,
+    fillColor: color,
+    fillOpacity: 0.9,
+    weight: 2,
+  }).addTo(map);
+
+  const address = displayName.split(',').slice(0, 3).join(',').trim();
+  const id = Date.now() + Math.random();
+
+  marker.bindPopup(`<strong>${address}</strong><br><small>${lat.toFixed(5)}, ${lng.toFixed(5)}</small>`);
+
+  meetPoints.push({
+    id,
+    marker,
+    data: { lat, lng, displayName, address, color },
+  });
+
+  renderMeetList();
+  updateMeetButtons();
+  clearMeetResult();
+  setStatus(`Start point added: ${address}`, 'info');
+}
+
+function removeMeetPoint(id) {
+  const idx = meetPoints.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  map.removeLayer(meetPoints[idx].marker);
+  meetPoints.splice(idx, 1);
+  renderMeetList();
+  updateMeetButtons();
+  clearMeetResult();
+}
+
+function renderMeetList() {
+  if (meetPoints.length === 0) {
+    meetListEl.innerHTML = '<p class="empty-msg">No start points yet.</p>';
+    return;
+  }
+  meetListEl.innerHTML = meetPoints.map((p, i) => `
+    <div class="meet-item" data-meet-id="${p.id}">
+      <span class="meet-swatch" style="background:${p.data.color}"></span>
+      <div class="meet-info">
+        <div class="meet-label">${i + 1}. ${p.data.address}</div>
+        <div class="meet-detail">${p.data.lat.toFixed(5)}, ${p.data.lng.toFixed(5)}</div>
+      </div>
+      <button class="delete-btn meet-delete" title="Remove">&#x2715;</button>
+    </div>
+  `).join('');
+}
+
+// Delegated click handler for meet list items
+meetListEl.addEventListener('click', (e) => {
+  const delBtn = e.target.closest('.meet-delete');
+  if (delBtn) {
+    const item = delBtn.closest('.meet-item');
+    const id = parseFloat(item.dataset.meetId);
+    removeMeetPoint(id);
+    return;
+  }
+
+  // Click on item to pan to that point
+  const item = e.target.closest('.meet-item');
+  if (item) {
+    const id = parseFloat(item.dataset.meetId);
+    const pt = meetPoints.find(p => p.id === id);
+    if (pt) {
+      map.panTo([pt.data.lat, pt.data.lng]);
+      pt.marker.openPopup();
+    }
+  }
+});
+
+function updateMeetButtons() {
+  meetFindBtn.disabled = meetPoints.length < 2;
+}
+
+function clearMeetResult() {
+  meetLines.forEach(l => map.removeLayer(l));
+  meetLines = [];
+  if (meetMidMarker) {
+    map.removeLayer(meetMidMarker);
+    meetMidMarker = null;
+  }
+  meetClearBtn.style.display = 'none';
+  meetInfoEl.innerHTML = '';
+}
+
+// Geographic midpoint using cartesian centroid on the unit sphere
+function computeGeographicMidpoint(points) {
+  let x = 0, y = 0, z = 0;
+  for (const p of points) {
+    const latR = p.lat * Math.PI / 180;
+    const lngR = p.lng * Math.PI / 180;
+    x += Math.cos(latR) * Math.cos(lngR);
+    y += Math.cos(latR) * Math.sin(lngR);
+    z += Math.sin(latR);
+  }
+  x /= points.length;
+  y /= points.length;
+  z /= points.length;
+
+  const lngR = Math.atan2(y, x);
+  const hyp = Math.sqrt(x * x + y * y);
+  const latR = Math.atan2(z, hyp);
+
+  return {
+    lat: latR * 180 / Math.PI,
+    lng: lngR * 180 / Math.PI,
+  };
+}
+
+function showMeetingPoint() {
+  clearMeetResult();
+
+  if (meetPoints.length < 2) return;
+
+  const coords = meetPoints.map(p => ({ lat: p.data.lat, lng: p.data.lng }));
+  const mid = computeGeographicMidpoint(coords);
+
+  // Draw dashed lines from each start point to the midpoint
+  meetPoints.forEach(p => {
+    const line = L.polyline(
+      [[p.data.lat, p.data.lng], [mid.lat, mid.lng]],
+      {
+        color: p.data.color,
+        weight: 2,
+        dashArray: '8, 6',
+        opacity: 0.6,
+      }
+    ).addTo(map);
+    meetLines.push(line);
+  });
+
+  // Place the midpoint marker
+  const midIcon = L.divIcon({
+    className: '',
+    html: '<div class="midpoint-icon">★</div>',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+
+  meetMidMarker = L.marker([mid.lat, mid.lng], { icon: midIcon }).addTo(map);
+
+  // Build info popup and sidebar text
+  const distances = meetPoints.map(p => {
+    const d = haversineDistance(p.data.lat, p.data.lng, mid.lat, mid.lng);
+    return { name: p.data.address, distance: d };
+  });
+
+  const popupHtml = `
+    <strong>Geographic Midpoint</strong><br>
+    <small>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</small><br>
+    ${distances.map(d => `<small>${d.name}: ${formatDistance(d.distance)}</small>`).join('<br>')}
+  `;
+  meetMidMarker.bindPopup(popupHtml).openPopup();
+
+  // Sidebar info
+  meetInfoEl.innerHTML = `
+    <p><strong>Geographic midpoint</strong></p>
+    <p>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</p>
+    ${distances.map(d => `<p>${d.name}: <strong>${formatDistance(d.distance)}</strong></p>`).join('')}
+    <p class="help-text" style="margin-top:6px">This is the straight-line midpoint. Travel-time routing coming soon.</p>
+  `;
+
+  meetClearBtn.style.display = '';
+
+  // Fit map to show all points + midpoint
+  const allPts = [...coords, mid];
+  const bounds = L.latLngBounds(allPts.map(p => [p.lat, p.lng]));
+  map.fitBounds(bounds.pad(0.2));
+}
+
+// Haversine distance in meters
+function haversineDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistance(meters) {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters / 1000;
+  if (km < 10) return `${km.toFixed(1)} km (${(km * 0.621371).toFixed(1)} mi)`;
+  return `${Math.round(km)} km (${Math.round(km * 0.621371)} mi)`;
+}
+
+// --- Meeting Point: Add start point ---
+
+meetAddBtn.addEventListener('click', async () => {
+  const input = meetAddressInput.value.trim();
+  if (!input) {
+    setStatus('Enter an address or use the map to add a start point.', 'error');
+    return;
+  }
+
+  meetAddBtn.disabled = true;
+  meetAddBtn.textContent = 'Geocoding...';
+
+  try {
+    const result = await geocode(input);
+    addMeetPoint(result.lat, result.lng, result.displayName);
+    meetAddressInput.value = '';
+  } catch (err) {
+    setStatus(`Could not find: ${input}`, 'error');
+  } finally {
+    meetAddBtn.disabled = false;
+    meetAddBtn.textContent = 'Add Start Point';
+  }
+});
+
+meetAddressInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    meetAddBtn.click();
+  }
+});
+
+// Use my location for meeting point
+meetLocationBtn.addEventListener('click', () => {
+  if (!('geolocation' in navigator)) {
+    setStatus('Geolocation not available.', 'error');
+    return;
+  }
+  meetLocationBtn.classList.add('loading');
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      let name = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      try {
+        name = await reverseGeocode(lat, lng);
+      } catch { /* keep coords */ }
+      addMeetPoint(lat, lng, name);
+      meetLocationBtn.classList.remove('loading');
+    },
+    () => {
+      setStatus('Could not get your location.', 'error');
+      meetLocationBtn.classList.remove('loading');
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+});
+
+// Pick on map for meeting point
+function enableMeetPickMode() {
+  meetPickMode = true;
+  meetPickBtn.classList.add('active');
+  meetPickBtn.textContent = '\u{1F5FA} Cancel Pick';
+  document.getElementById('map').classList.add('pick-mode');
+  setStatus('Click on the map to place a start point.', 'info');
+}
+
+function disableMeetPickMode() {
+  meetPickMode = false;
+  meetPickBtn.classList.remove('active');
+  meetPickBtn.textContent = '\u{1F5FA} Pick on Map';
+  document.getElementById('map').classList.remove('pick-mode');
+}
+
+meetPickBtn.addEventListener('click', () => {
+  if (meetPickMode) {
+    disableMeetPickMode();
+    if (meetPickMarker) {
+      map.removeLayer(meetPickMarker);
+      meetPickMarker = null;
+    }
+    clearStatus();
+  } else {
+    // Cancel circle pick mode if active
+    if (pickMode) {
+      disablePickMode();
+      removePickMarker();
+      clearSelectedLocation();
+    }
+    enableMeetPickMode();
+  }
+});
+
+// Find meeting point button
+meetFindBtn.addEventListener('click', () => {
+  showMeetingPoint();
+});
+
+// Clear meeting point button
+meetClearBtn.addEventListener('click', () => {
+  clearMeetResult();
+  clearStatus();
+});
+
 // --- Global keyboard shortcuts ---
 document.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName;
   const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 
-  // Escape: deselect circle, or cancel preview (works even in inputs)
+  // Escape: cancel meet pick, deselect circle, or cancel preview (works even in inputs)
   if (e.key === 'Escape') {
-    if (selectedCircleId !== null) {
+    if (meetPickMode) {
+      disableMeetPickMode();
+      clearStatus();
+    } else if (selectedCircleId !== null) {
       deselectCircle();
     } else if (previewCircle) {
       cancelBtn.click();

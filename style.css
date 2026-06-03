@@ -537,6 +537,105 @@ hr {
   margin-bottom: 4px;
 }
 
+/* --- Meeting Point --- */
+
+.btn-meet-add {
+  background: #2d6a4f;
+  color: #fff;
+}
+
+.btn-meet-add:hover:not(:disabled) {
+  background: #1b4332;
+}
+
+.btn-meet-find {
+  background: #0f766e;
+  color: #fff;
+}
+
+.btn-meet-find:hover:not(:disabled) {
+  background: #0d5f58;
+}
+
+.meet-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.meet-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  margin-bottom: 5px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  transition: border-color 0.15s;
+}
+
+.meet-item:hover {
+  border-color: #adb5bd;
+}
+
+.meet-item .meet-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #10b981;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.meet-item .meet-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.meet-item .meet-label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meet-item .meet-detail {
+  color: #6c757d;
+  font-size: 0.75rem;
+}
+
+.meet-item .delete-btn {
+  background: none;
+  border: none;
+  color: #adb5bd;
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: color 0.2s, background 0.2s;
+}
+
+.meet-item .delete-btn:hover {
+  color: #dc3545;
+  background: #f8d7da;
+}
+
+.midpoint-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #f59e0b;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  color: #fff;
+  font-size: 14px;
+  font-weight: bold;
+}
+
 .dev-tools {
   margin-top: 4px;
 }

@@ -74,6 +74,30 @@
 
     <hr />
 
+    <h2>Meeting Point</h2>
+    <p class="help-text">Add 2+ starting locations to find the best meeting point between them.</p>
+
+    <div class="input-group">
+      <label for="meet-address">Address or Location</label>
+      <div class="address-row">
+        <input type="text" id="meet-address" placeholder="e.g. 1600 Pennsylvania Ave" />
+        <button type="button" id="meet-location-btn" class="icon-btn" title="Use my current location">&#x1F4CD;</button>
+      </div>
+    </div>
+
+    <button id="meet-pick-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
+    <button id="meet-add-btn" class="btn btn-meet-add">Add Start Point</button>
+
+    <div id="meet-list" class="meet-list">
+      <p class="empty-msg">No start points yet.</p>
+    </div>
+
+    <button id="meet-find-btn" class="btn btn-meet-find" disabled>Find Meeting Point</button>
+    <button id="meet-clear-btn" class="btn btn-cancel" style="display:none">Clear Meeting Point</button>
+    <div id="meet-info" class="intersection-info"></div>
+
+    <hr />
+
     <details class="dev-tools">
       <summary>Dev Tools</summary>
       <button id="dev-add-test" class="btn btn-dev">Add 2 Test Circles</button>

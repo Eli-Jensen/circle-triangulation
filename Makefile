@@ -1,4 +1,5 @@
-.PHONY: help serve stop restart open backend backend-stop setup download dev
+.PHONY: help serve stop restart open backend backend-stop setup download dev \
+       db-up db-down db-import db-reset db-shell
 
 .DEFAULT_GOAL := help
 
@@ -6,21 +7,27 @@
 help:
 	@echo "Circle Triangulation — available commands:"
 	@echo ""
-	@echo "  make dev            Start frontend + backend, open browser"
+	@echo "  make dev            Start DB + frontend + backend, open browser"
 	@echo "  make serve          Start frontend server (port $(PORT))"
 	@echo "  make serve-bg       Start frontend in background"
 	@echo "  make backend        Start backend API (port $(API_PORT))"
 	@echo "  make backend-bg     Start backend in background"
 	@echo "  make restart        Restart both frontend and backend"
-	@echo "  make stop           Stop both frontend and backend"
+	@echo "  make stop           Stop frontend + backend (DB keeps running)"
 	@echo "  make open           Open app in default browser"
 	@echo ""
 	@echo "  make setup          Create Python venv and install dependencies"
 	@echo "  make download       Download population rasters (all countries)"
 	@echo '  make download COUNTRIES="USA BRA"  Download specific countries'
 	@echo ""
+	@echo "  make db-up          Start PostgreSQL (Docker)"
+	@echo "  make db-down        Stop PostgreSQL"
+	@echo "  make db-import      Download + import OSM data (DC/MD/VA)"
+	@echo "  make db-reset       Wipe DB and re-import from scratch"
+	@echo "  make db-shell       Open psql shell"
+	@echo ""
 	@echo "Quick start:"
-	@echo "  make setup && make download COUNTRIES=\"ARG BRA\" && make dev"
+	@echo "  make setup && make db-up && make db-import && make dev"
 
 PORT ?= 8080
 API_PORT ?= 8081
@@ -80,12 +87,41 @@ backend-bg:
 	@echo "Starting backend in background at http://localhost:$(API_PORT)"
 	@cd backend && .venv/bin/uvicorn app:app --host 0.0.0.0 --port $(API_PORT) &>/dev/null &
 
+# --- Database ---
+
+# Start PostgreSQL with PostGIS + pgRouting
+db-up:
+	@docker compose up -d
+	@echo "Waiting for database to be ready..."
+	@until docker compose exec -T db pg_isready -U ct -d circle_tri >/dev/null 2>&1; do sleep 1; done
+	@echo "Database ready at localhost:5432"
+
+# Stop PostgreSQL
+db-down:
+	@docker compose down
+
+# Download Geofabrik OSM extracts and import into PostGIS
+db-import:
+	cd backend && .venv/bin/python import_osm.py
+
+# Wipe database and re-import
+db-reset:
+	docker compose down -v
+	@$(MAKE) db-up
+	@$(MAKE) db-import
+
+# Open psql shell
+db-shell:
+	docker compose exec db psql -U ct -d circle_tri
+
 # --- Full dev environment ---
 
-# Start both frontend and backend, open browser
-dev: serve-bg backend-bg
+# Start DB + frontend + backend, open browser
+dev: db-up serve-bg backend-bg
 	@sleep 1
 	@open http://localhost:$(PORT)
 	@echo "Frontend: http://localhost:$(PORT)"
 	@echo "Backend:  http://localhost:$(API_PORT)"
-	@echo "Use 'make stop' to shut down both."
+	@echo "Database: localhost:5432"
+	@echo "Use 'make stop' to shut down frontend + backend."
+	@echo "Use 'make db-down' to stop the database."
