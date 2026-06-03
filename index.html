@@ -76,7 +76,10 @@
     <details class="feature-tray" id="tray-meeting" open>
       <summary class="tray-header tray-header--green">Meeting Point</summary>
       <div class="tray-body">
-        <p class="help-text">Add 2+ locations to find the driving-time midpoint between them.</p>
+        <p class="help-text">Add 2+ locations. With 2 people, shows a corridor of possible meeting spots along the route. With 3+, shows the overlapping reachable area.</p>
+        <div class="meet-disclaimer" id="meet-disclaimer" style="display:none">
+          &#x26A0; Times use free-flow speeds (no live traffic). Actual drive times may be longer during peak hours.
+        </div>
 
         <div class="input-group">
           <label for="meet-address">Address or Location</label>
@@ -130,6 +133,7 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

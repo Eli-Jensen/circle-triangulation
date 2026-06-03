@@ -697,7 +697,52 @@ details.feature-tray[open] > .tray-header::before {
   background: #f8d7da;
 }
 
-.midpoint-icon {
+.meet-time-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.meet-time-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #6c757d;
+}
+
+.meet-time-input {
+  width: 52px;
+  padding: 2px 4px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.meet-time-input:focus {
+  outline: none;
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.15);
+}
+
+.meet-time-unit {
+  font-size: 0.7rem;
+  color: #6c757d;
+}
+
+.meet-disclaimer {
+  font-size: 0.72rem;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 5px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.midpoint-icon,
+.sweetspot-icon {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -710,6 +755,18 @@ details.feature-tray[open] > .tray-header::before {
   color: #fff;
   font-size: 14px;
   font-weight: bold;
+}
+
+.sweetspot-icon {
+  width: 32px;
+  height: 32px;
+  font-size: 16px;
+  animation: sweetspot-pulse 2s ease-in-out 3;
+}
+
+@keyframes sweetspot-pulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+  50% { box-shadow: 0 2px 8px rgba(245, 158, 11, 0.6), 0 0 20px rgba(245, 158, 11, 0.3); }
 }
 
 .dev-tools {

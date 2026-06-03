@@ -1637,7 +1637,7 @@ function addMeetPoint(lat, lng, displayName) {
   meetPoints.push({
     id,
     marker,
-    data: { lat, lng, displayName, address, color },
+    data: { lat, lng, displayName, address, color, maxDriveMinutes: null },
   });
 
   renderMeetList();
@@ -1667,6 +1667,14 @@ function renderMeetList() {
       <div class="meet-info">
         <div class="meet-label">${i + 1}. ${p.data.address}</div>
         <div class="meet-detail">${p.data.lat.toFixed(5)}, ${p.data.lng.toFixed(5)}</div>
+        <div class="meet-time-row">
+          <label class="meet-time-label">Max</label>
+          <input type="number" class="meet-time-input"
+                 value="${p.data.maxDriveMinutes || ''}"
+                 placeholder="any" min="1" max="480" step="5"
+                 data-meet-id="${p.id}" />
+          <span class="meet-time-unit">min</span>
+        </div>
       </div>
       <button class="delete-btn meet-delete" title="Remove">&#x2715;</button>
     </div>
@@ -1683,7 +1691,8 @@ meetListEl.addEventListener('click', (e) => {
     return;
   }
 
-  // Click on item to pan to that point
+  // Click on item to pan to that point (but not on time inputs)
+  if (e.target.closest('.meet-time-input')) return;
   const item = e.target.closest('.meet-item');
   if (item) {
     const id = parseFloat(item.dataset.meetId);
@@ -1692,6 +1701,19 @@ meetListEl.addEventListener('click', (e) => {
       map.panTo([pt.data.lat, pt.data.lng]);
       pt.marker.openPopup();
     }
+  }
+});
+
+// Delegated input handler for per-participant max drive time
+meetListEl.addEventListener('input', (e) => {
+  const timeInput = e.target.closest('.meet-time-input');
+  if (!timeInput) return;
+  const id = parseFloat(timeInput.dataset.meetId);
+  const pt = meetPoints.find(p => p.id === id);
+  if (pt) {
+    const val = parseInt(timeInput.value, 10);
+    pt.data.maxDriveMinutes = (val > 0) ? val : null;
+    clearMeetResult();
   }
 });
 
@@ -1708,6 +1730,8 @@ function clearMeetResult() {
   }
   meetClearBtn.style.display = 'none';
   meetInfoEl.innerHTML = '';
+  const disclaimer = document.getElementById('meet-disclaimer');
+  if (disclaimer) disclaimer.style.display = 'none';
 }
 
 // Geographic midpoint using cartesian centroid on the unit sphere
@@ -1806,19 +1830,17 @@ async function showMeetingPoint() {
   const coords = meetPoints.map(p => ({ lat: p.data.lat, lng: p.data.lng }));
 
   meetFindBtn.disabled = true;
-  meetFindBtn.textContent = 'Calculating route...';
-  meetInfoEl.innerHTML = '<p>Fetching routes from OSRM...</p>';
+  meetFindBtn.textContent = 'Calculating...';
 
   try {
     if (meetPoints.length === 2) {
-      await showTwoPointMidpoint(coords);
+      await showTwoPointCorridor(coords);
     } else {
-      await showMultiPointMidpoint(coords);
+      await showMultiPointRegion(coords);
     }
   } catch (err) {
-    console.error('Routing error:', err);
-    // Fall back to geographic midpoint
-    meetInfoEl.innerHTML = `<p class="help-text">Routing failed (${err.message}). Showing geographic midpoint instead.</p>`;
+    console.error('Meeting point error:', err);
+    meetInfoEl.innerHTML = `<p class="help-text">Error: ${err.message}. Showing geographic midpoint instead.</p>`;
     showGeographicFallback(coords);
   } finally {
     meetFindBtn.disabled = false;
@@ -1826,162 +1848,371 @@ async function showMeetingPoint() {
   }
 }
 
-async function showTwoPointMidpoint(coords) {
-  const [a, b] = coords;
+// --- Two-Participant Corridor ---
 
-  // Get route A→B
-  const route = await osrmRoute(a, b);
-  const totalDuration = route.duration;
-  const totalDistance = route.distance;
-
-  // Find midpoint along route at 50% distance
-  const mid = pointAlongRoute(route, 0.5);
-
-  // Get routes from each point to midpoint for accurate times
-  const [routeA, routeB] = await Promise.all([
-    osrmRoute(a, mid),
-    osrmRoute(b, mid),
-  ]);
-
-  // Draw the full route as two colored halves
-  const routeALatLngs = routeToLatLngs(routeA);
-  const routeBLatLngs = routeToLatLngs(routeB);
-
-  const lineA = L.polyline(routeALatLngs, {
-    color: meetPoints[0].data.color,
-    weight: 4,
-    opacity: 0.8,
-  }).addTo(map);
-  meetLines.push(lineA);
-
-  const lineB = L.polyline(routeBLatLngs, {
-    color: meetPoints[1].data.color,
-    weight: 4,
-    opacity: 0.8,
-  }).addTo(map);
-  meetLines.push(lineB);
-
-  // Place midpoint marker
-  placeMidpointMarker(mid, [
-    { name: meetPoints[0].data.address, duration: routeA.duration, distance: routeA.distance },
-    { name: meetPoints[1].data.address, duration: routeB.duration, distance: routeB.distance },
-  ]);
-
-  // Fit bounds to route
-  const allLatLngs = [...routeALatLngs, ...routeBLatLngs];
-  const bounds = L.latLngBounds(allLatLngs);
-  map.fitBounds(bounds.pad(0.15));
-}
-
-async function showMultiPointMidpoint(coords) {
-  // For 3+ points: start with geographic centroid, then use OSRM table
-  // to find the nearby point minimizing max travel time.
-  const geo = computeGeographicMidpoint(coords);
-
-  // Generate a grid of candidate points around the centroid
-  const offset = 0.05; // ~5km at mid-latitudes
-  const candidates = [
-    geo,
-    { lat: geo.lat + offset, lng: geo.lng },
-    { lat: geo.lat - offset, lng: geo.lng },
-    { lat: geo.lat, lng: geo.lng + offset },
-    { lat: geo.lat, lng: geo.lng - offset },
-    { lat: geo.lat + offset * 0.7, lng: geo.lng + offset * 0.7 },
-    { lat: geo.lat + offset * 0.7, lng: geo.lng - offset * 0.7 },
-    { lat: geo.lat - offset * 0.7, lng: geo.lng + offset * 0.7 },
-    { lat: geo.lat - offset * 0.7, lng: geo.lng - offset * 0.7 },
-  ];
-
-  meetInfoEl.innerHTML = '<p>Testing 9 candidate points...</p>';
-
-  // Use OSRM table to get durations from all starts to all candidates
+async function osrmTableForCorridor(a, b, samplePoints) {
   const profile = osrmProfile();
-  const allPoints = [...coords, ...candidates];
+  const allPoints = [a, b, ...samplePoints];
   const coordStr = allPoints.map(p => `${p.lng},${p.lat}`).join(';');
-  const sourceIndices = coords.map((_, i) => i).join(';');
-  const destIndices = candidates.map((_, i) => i + coords.length).join(';');
-
-  const url = `${OSRM_BASE}/table/v1/${profile}/${coordStr}?sources=${sourceIndices}&destinations=${destIndices}`;
+  const destIndices = samplePoints.map((_, i) => i + 2).join(';');
+  const url = `${OSRM_BASE}/table/v1/${profile}/${coordStr}?sources=0;1&destinations=${destIndices}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`OSRM table error: ${resp.status}`);
   const data = await resp.json();
   if (data.code !== 'Ok') throw new Error('OSRM table failed');
+  return { fromA: data.durations[0], fromB: data.durations[1] };
+}
 
-  // data.durations[source_idx][dest_idx] = seconds
-  // Find candidate minimizing the maximum duration from any source
-  let bestIdx = 0;
-  let bestMaxTime = Infinity;
+async function fetchDensitiesAtPoints(points) {
+  try {
+    const res = await fetch(`${API_BASE}/density/at-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: points.map(p => ({ lat: p.lat, lng: p.lng })) }),
+    });
+    if (!res.ok) return points.map(() => 0);
+    const result = await res.json();
+    return result.points.map(p => p.density);
+  } catch {
+    return points.map(() => 0);
+  }
+}
 
-  for (let c = 0; c < candidates.length; c++) {
-    let maxTime = 0;
-    for (let s = 0; s < coords.length; s++) {
-      const t = data.durations[s][c];
-      if (t === null) { maxTime = Infinity; break; }
-      maxTime = Math.max(maxTime, t);
-    }
-    if (maxTime < bestMaxTime) {
-      bestMaxTime = maxTime;
-      bestIdx = c;
-    }
+async function showTwoPointCorridor(coords) {
+  const [a, b] = coords;
+  const maxTimeA = meetPoints[0].data.maxDriveMinutes ? meetPoints[0].data.maxDriveMinutes * 60 : Infinity;
+  const maxTimeB = meetPoints[1].data.maxDriveMinutes ? meetPoints[1].data.maxDriveMinutes * 60 : Infinity;
+
+  // Step 1: Get full route
+  meetInfoEl.innerHTML = '<p>Fetching route...</p>';
+  const route = await osrmRoute(a, b);
+
+  // Step 2: Sample points along route
+  const NUM_SAMPLES = 50;
+  const samplePoints = [];
+  for (let i = 0; i <= NUM_SAMPLES; i++) {
+    samplePoints.push(pointAlongRoute(route, i / NUM_SAMPLES));
   }
 
-  const mid = candidates[bestIdx];
+  // Step 3: Get time matrix
+  meetInfoEl.innerHTML = '<p>Computing drive times...</p>';
+  const timeMatrix = await osrmTableForCorridor(a, b, samplePoints);
 
-  // Get individual routes from each start to the best midpoint
-  const routes = await Promise.all(
-    coords.map((c, i) => osrmRoute(c, mid))
-  );
+  // Step 4: Get population density
+  meetInfoEl.innerHTML = '<p>Checking population density...</p>';
+  const densities = await fetchDensitiesAtPoints(samplePoints);
 
-  // Draw each route
-  routes.forEach((route, i) => {
-    const line = L.polyline(routeToLatLngs(route), {
-      color: meetPoints[i].data.color,
-      weight: 4,
-      opacity: 0.8,
-    }).addTo(map);
-    meetLines.push(line);
-  });
-
-  // Place midpoint marker
-  const durations = routes.map((r, i) => ({
-    name: meetPoints[i].data.address,
-    duration: r.duration,
-    distance: r.distance,
-  }));
-  placeMidpointMarker(mid, durations);
-
-  // Fit bounds
-  const allLatLngs = routes.flatMap(r => routeToLatLngs(r));
-  const bounds = L.latLngBounds(allLatLngs);
-  map.fitBounds(bounds.pad(0.15));
+  // Step 5: Render
+  renderCorridor(route, samplePoints, timeMatrix, densities, maxTimeA, maxTimeB);
 }
 
-function placeMidpointMarker(mid, durations) {
-  const midIcon = L.divIcon({
-    className: '',
-    html: '<div class="midpoint-icon">★</div>',
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
+function renderCorridor(route, samplePoints, timeMatrix, densities, maxTimeA, maxTimeB) {
+  const { fromA, fromB } = timeMatrix;
+  const maxDensity = Math.max(...densities, 0.001);
+
+  // Build per-sample-point data
+  const sampleData = samplePoints.map((pt, i) => {
+    const timeA = fromA[i];
+    const timeB = fromB[i];
+    const density = densities[i];
+
+    const reachableA = timeA !== null && timeA <= maxTimeA;
+    const reachableB = timeB !== null && timeB <= maxTimeB;
+    const reachable = reachableA && reachableB;
+
+    // Equi-time score: 1.0 = perfectly equal, lower = more unbalanced
+    const minTime = Math.min(timeA || 0, timeB || 0);
+    const maxTime = Math.max(timeA || 1, timeB || 1);
+    const equiScore = maxTime > 0 ? minTime / maxTime : 0;
+
+    // Fade near time limits (1.0 = comfortably within, 0.0 = at boundary)
+    let fadeFactor = 1.0;
+    if (maxTimeA < Infinity) {
+      const ratioA = timeA / maxTimeA;
+      if (ratioA > 0.8) fadeFactor = Math.min(fadeFactor, (1.0 - ratioA) / 0.2);
+    }
+    if (maxTimeB < Infinity) {
+      const ratioB = timeB / maxTimeB;
+      if (ratioB > 0.8) fadeFactor = Math.min(fadeFactor, (1.0 - ratioB) / 0.2);
+    }
+    fadeFactor = Math.max(fadeFactor, 0);
+
+    return { pt, timeA, timeB, density, reachable, equiScore, fadeFactor };
   });
 
-  meetMidMarker = L.marker([mid.lat, mid.lng], { icon: midIcon }).addTo(map);
+  // Find sweet spot: best combination of equi-time + density
+  let bestIdx = 0;
+  let bestScore = -1;
+  sampleData.forEach((d, i) => {
+    if (!d.reachable) return;
+    const densityNorm = d.density / maxDensity;
+    const score = d.equiScore * 0.6 + densityNorm * 0.4;
+    if (score > bestScore) { bestScore = score; bestIdx = i; }
+  });
 
+  // Draw faint base route line
+  const fullRouteLatLngs = routeToLatLngs(route);
+  const baseLine = L.polyline(fullRouteLatLngs, {
+    color: '#9ca3af', weight: 2, opacity: 0.3, dashArray: '4,4',
+  }).addTo(map);
+  meetLines.push(baseLine);
+
+  // Draw density-colored segments
+  for (let i = 0; i < samplePoints.length - 1; i++) {
+    const d = sampleData[i];
+    const dNext = sampleData[i + 1];
+    const avgDensity = (d.density + dNext.density) / 2;
+    const avgFade = (d.fadeFactor + dNext.fadeFactor) / 2;
+    const reachable = d.reachable && dNext.reachable;
+
+    let color, weight, opacity;
+    if (!reachable) {
+      color = '#d1d5db'; weight = 2; opacity = 0.2;
+    } else if (avgDensity > 0 && maxDensity > 0) {
+      const norm = Math.min(avgDensity / maxDensity, 1);
+      color = densityColor(norm);
+      weight = 5 + norm * 9;
+      opacity = 0.5 + avgFade * 0.5;
+    } else {
+      color = '#9ca3af'; weight = 3; opacity = 0.3 + avgFade * 0.3;
+    }
+
+    const segment = L.polyline(
+      [[d.pt.lat, d.pt.lng], [dNext.pt.lat, dNext.pt.lng]],
+      { color, weight, opacity, lineCap: 'round', lineJoin: 'round' }
+    ).addTo(map);
+
+    if (avgDensity > 0 && reachable) {
+      segment.bindPopup(
+        `<strong>Population:</strong> ${avgDensity.toFixed(1)}<br>` +
+        `${meetPoints[0].data.address}: ${formatDuration(d.timeA)}<br>` +
+        `${meetPoints[1].data.address}: ${formatDuration(d.timeB)}`
+      );
+    }
+    meetLines.push(segment);
+  }
+
+  // Place sweet-spot marker
+  const sweet = sampleData[bestIdx];
+  if (sweet && sweet.reachable) {
+    const midIcon = L.divIcon({
+      className: '', html: '<div class="sweetspot-icon">&#x2605;</div>',
+      iconSize: [32, 32], iconAnchor: [16, 16],
+    });
+    meetMidMarker = L.marker([sweet.pt.lat, sweet.pt.lng], { icon: midIcon }).addTo(map);
+    const mode = modeLabel();
+    meetMidMarker.bindPopup(
+      `<strong>Suggested meeting area</strong><br>` +
+      `<small>${meetPoints[0].data.address}: ${formatDuration(sweet.timeA)}</small><br>` +
+      `<small>${meetPoints[1].data.address}: ${formatDuration(sweet.timeB)}</small><br>` +
+      (sweet.density > 0 ? `<small>Pop. density: ${sweet.density.toFixed(1)}</small>` : '<small>Low population area</small>')
+    ).openPopup();
+  }
+
+  map.fitBounds(L.latLngBounds(fullRouteLatLngs).pad(0.15));
+  document.getElementById('meet-disclaimer').style.display = '';
+
+  // Sidebar info
+  const reachableCount = sampleData.filter(d => d.reachable).length;
+  const populatedReachable = sampleData.filter(d => d.reachable && d.density > 0).length;
   const mode = modeLabel();
-  const popupHtml = `
-    <strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} Midpoint</strong><br>
-    <small>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</small><br>
-    ${durations.map(d => `<small>${d.name}: ${formatDuration(d.duration)} (${formatDistance(d.distance)})</small>`).join('<br>')}
-  `;
-  meetMidMarker.bindPopup(popupHtml).openPopup();
-
   meetInfoEl.innerHTML = `
-    <p><strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} midpoint</strong></p>
-    <p>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</p>
-    ${durations.map(d => `<p>${d.name}: <strong>${formatDuration(d.duration)}</strong> (${formatDistance(d.distance)})</p>`).join('')}
+    <p><strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} corridor</strong></p>
+    ${sweet && sweet.reachable ? `
+      <p><strong>Suggested meeting area:</strong></p>
+      <p>${meetPoints[0].data.address}: <strong>${formatDuration(sweet.timeA)}</strong></p>
+      <p>${meetPoints[1].data.address}: <strong>${formatDuration(sweet.timeB)}</strong></p>
+    ` : '<p>No reachable overlap — try increasing time limits.</p>'}
+    <p class="help-text">${populatedReachable} of ${reachableCount} reachable points are populated.</p>
   `;
-
   meetClearBtn.style.display = '';
 }
+
+// --- Three+ Participant Isochrone Region ---
+
+const VALHALLA_BASE = 'https://valhalla1.openstreetmap.de';
+
+function valhallaCosting() {
+  const mode = document.getElementById('meet-mode').value;
+  if (mode === 'walking') return 'pedestrian';
+  if (mode === 'cycling') return 'bicycle';
+  return 'auto';
+}
+
+async function fetchIsochrone(point, timeMinutes) {
+  const costing = valhallaCosting();
+  const json = JSON.stringify({
+    locations: [{ lat: point.lat, lon: point.lng }],
+    costing: costing,
+    contours: [{ time: timeMinutes }],
+    polygons: true,
+  });
+  const url = `${VALHALLA_BASE}/isochrone?json=${encodeURIComponent(json)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Valhalla error: ${resp.status}`);
+  const data = await resp.json();
+  if (!data.features || !data.features.length) throw new Error('No isochrone returned');
+  return data.features[0];
+}
+
+async function fetchAllIsochrones() {
+  const isochrones = [];
+  for (let i = 0; i < meetPoints.length; i++) {
+    const pt = meetPoints[i];
+    const minutes = pt.data.maxDriveMinutes || 30;
+    meetInfoEl.innerHTML = `<p>Fetching isochrone ${i + 1} of ${meetPoints.length}...</p>`;
+    const iso = await fetchIsochrone({ lat: pt.data.lat, lng: pt.data.lng }, minutes);
+    isochrones.push(iso);
+    if (i < meetPoints.length - 1) await new Promise(r => setTimeout(r, 1100));
+  }
+  return isochrones;
+}
+
+function intersectIsochrones(isochrones) {
+  if (isochrones.length === 0) return null;
+  if (isochrones.length === 1) return isochrones[0];
+  let result = isochrones[0];
+  for (let i = 1; i < isochrones.length; i++) {
+    result = turf.intersect(turf.featureCollection([result, isochrones[i]]));
+    if (!result) return null;
+  }
+  return result;
+}
+
+async function sampleDensityInPolygon(polygon, numSamples = 80) {
+  const bbox = turf.bbox(polygon);
+  const cellSide = Math.max(
+    turf.distance(turf.point([bbox[0], bbox[1]]), turf.point([bbox[2], bbox[1]])) / 10,
+    0.5
+  );
+  const grid = turf.pointGrid(bbox, cellSide, { units: 'kilometers' });
+  const insidePoints = grid.features
+    .filter(pt => turf.booleanPointInPolygon(pt, polygon))
+    .slice(0, numSamples);
+  if (insidePoints.length === 0) return [];
+
+  const points = insidePoints.map(pt => ({
+    lat: pt.geometry.coordinates[1], lng: pt.geometry.coordinates[0],
+  }));
+  const densities = await fetchDensitiesAtPoints(points);
+  return points.map((p, i) => ({ ...p, density: densities[i] }));
+}
+
+async function showMultiPointRegion(coords) {
+  try {
+    const isochrones = await fetchAllIsochrones();
+
+    meetInfoEl.innerHTML = '<p>Computing overlap region...</p>';
+    const intersection = intersectIsochrones(isochrones);
+
+    if (!intersection) {
+      meetInfoEl.innerHTML = `
+        <p class="help-text" style="color:#dc3545">
+          <strong>No overlap found.</strong> The participants' reachable areas don't intersect.
+          Try increasing max drive times.
+        </p>`;
+      renderIndividualIsochrones(isochrones);
+      meetClearBtn.style.display = '';
+      document.getElementById('meet-disclaimer').style.display = '';
+      return;
+    }
+
+    meetInfoEl.innerHTML = '<p>Analyzing population in overlap area...</p>';
+    const densitySamples = await sampleDensityInPolygon(intersection);
+
+    renderIsochroneRegion(isochrones, intersection, densitySamples);
+  } catch (err) {
+    console.error('Isochrone error:', err);
+    meetInfoEl.innerHTML = `<p class="help-text">Isochrone API failed (${err.message}). Falling back to geographic midpoint.</p>`;
+    showGeographicFallback(coords);
+  }
+}
+
+function renderIndividualIsochrones(isochrones) {
+  isochrones.forEach((iso, i) => {
+    const color = meetPoints[i].data.color;
+    const layer = L.geoJSON(iso, {
+      style: { color, weight: 2, opacity: 0.6, fillColor: color, fillOpacity: 0.1 },
+    }).addTo(map);
+    meetLines.push(layer);
+  });
+  const allBounds = L.latLngBounds([]);
+  isochrones.forEach(iso => allBounds.extend(L.geoJSON(iso).getBounds()));
+  map.fitBounds(allBounds.pad(0.15));
+}
+
+function renderIsochroneRegion(isochrones, intersection, densitySamples) {
+  // Individual isochrone outlines
+  isochrones.forEach((iso, i) => {
+    const color = meetPoints[i].data.color;
+    const layer = L.geoJSON(iso, {
+      style: { color, weight: 2, opacity: 0.4, fillColor: color, fillOpacity: 0.05, dashArray: '6,4' },
+    }).addTo(map);
+    meetLines.push(layer);
+  });
+
+  // Intersection polygon
+  const intersectionLayer = L.geoJSON(intersection, {
+    style: { color: '#065f46', weight: 3, opacity: 0.8, fillColor: '#10b981', fillOpacity: 0.15 },
+  }).addTo(map);
+  meetLines.push(intersectionLayer);
+
+  // Density markers inside intersection
+  const maxDensity = Math.max(...densitySamples.map(s => s.density), 0.001);
+  densitySamples.forEach(sample => {
+    if (sample.density <= 0) return;
+    const norm = Math.min(sample.density / maxDensity, 1);
+    const m = L.circleMarker([sample.lat, sample.lng], {
+      radius: 5 + norm * 8,
+      color: densityColor(norm), fillColor: densityColor(norm),
+      fillOpacity: 0.6 + norm * 0.3, weight: 1,
+    }).addTo(map);
+    m.bindPopup(`<strong>Population:</strong> ${sample.density.toFixed(1)}`);
+    meetLines.push(m);
+  });
+
+  // Sweet spot: densest point, or centroid if no data
+  const populated = densitySamples.filter(s => s.density > 0);
+  let sweetPt;
+  if (populated.length > 0) {
+    const best = populated.reduce((a, b) => a.density > b.density ? a : b);
+    sweetPt = { lat: best.lat, lng: best.lng };
+  } else {
+    const c = turf.centroid(intersection);
+    sweetPt = { lat: c.geometry.coordinates[1], lng: c.geometry.coordinates[0] };
+  }
+
+  const midIcon = L.divIcon({
+    className: '', html: '<div class="sweetspot-icon">&#x2605;</div>',
+    iconSize: [32, 32], iconAnchor: [16, 16],
+  });
+  meetMidMarker = L.marker([sweetPt.lat, sweetPt.lng], { icon: midIcon }).addTo(map);
+  meetMidMarker.bindPopup(
+    `<strong>Suggested meeting area</strong><br>` +
+    `<small>${sweetPt.lat.toFixed(5)}, ${sweetPt.lng.toFixed(5)}</small>`
+  ).openPopup();
+
+  map.fitBounds(intersectionLayer.getBounds().pad(0.2));
+  document.getElementById('meet-disclaimer').style.display = '';
+
+  // Sidebar info
+  const areaKm2 = turf.area(intersection) / 1e6;
+  const popCount = populated.length;
+  const totalSampled = densitySamples.length;
+  const mode = modeLabel();
+  let html = `<p><strong>Meeting region</strong> (${mode})</p>`;
+  html += `<p>Overlap area: ~${areaKm2.toFixed(1)} km&sup2;</p>`;
+  meetPoints.forEach(p => {
+    html += `<p>${p.data.address}: within ${p.data.maxDriveMinutes || 30} min</p>`;
+  });
+  if (totalSampled > 0) {
+    html += `<p class="help-text">${popCount} of ${totalSampled} sampled points are populated.</p>`;
+  }
+  meetInfoEl.innerHTML = html;
+  meetClearBtn.style.display = '';
+}
+
+// --- Fallback ---
 
 function showGeographicFallback(coords) {
   const mid = computeGeographicMidpoint(coords);
@@ -1995,10 +2226,8 @@ function showGeographicFallback(coords) {
   });
 
   const midIcon = L.divIcon({
-    className: '',
-    html: '<div class="midpoint-icon">★</div>',
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
+    className: '', html: '<div class="midpoint-icon">★</div>',
+    iconSize: [28, 28], iconAnchor: [14, 14],
   });
   meetMidMarker = L.marker([mid.lat, mid.lng], { icon: midIcon }).addTo(map);
 
@@ -2015,7 +2244,6 @@ function showGeographicFallback(coords) {
   meetInfoEl.innerHTML += `
     ${distances.map(d => `<p>${d.name}: <strong>${formatDistance(d.distance)}</strong> (straight line)</p>`).join('')}
   `;
-
   meetClearBtn.style.display = '';
   const allPts = [...coords, mid];
   map.fitBounds(L.latLngBounds(allPts.map(p => [p.lat, p.lng])).pad(0.2));
