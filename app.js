@@ -1734,29 +1734,229 @@ function computeGeographicMidpoint(points) {
   };
 }
 
-function showMeetingPoint() {
-  clearMeetResult();
+// OSRM routing helper
+const OSRM_BASE = 'https://router.project-osrm.org';
 
+function osrmProfile() {
+  const mode = document.getElementById('meet-mode').value;
+  if (mode === 'walking') return 'foot';
+  if (mode === 'cycling') return 'bike';
+  return 'car';
+}
+
+function modeLabel() {
+  const mode = document.getElementById('meet-mode').value;
+  if (mode === 'walking') return 'walking';
+  if (mode === 'cycling') return 'cycling';
+  return 'driving';
+}
+
+async function osrmRoute(from, to) {
+  const profile = osrmProfile();
+  const url = `${OSRM_BASE}/route/v1/${profile}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`OSRM error: ${resp.status}`);
+  const data = await resp.json();
+  if (data.code !== 'Ok' || !data.routes.length) throw new Error('No route found');
+  return data.routes[0]; // { geometry, duration, distance, legs }
+}
+
+// Decode OSRM route geometry into array of [lat, lng]
+function routeToLatLngs(route) {
+  return route.geometry.coordinates.map(c => [c[1], c[0]]);
+}
+
+// Find the point along a route polyline at a given fraction of total duration
+function pointAlongRoute(route, fraction) {
+  const coords = route.geometry.coordinates; // [lng, lat]
+  const totalDist = route.distance; // meters
+  const targetDist = totalDist * fraction;
+
+  let accumulated = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const segDist = haversineDistance(coords[i-1][1], coords[i-1][0], coords[i][1], coords[i][0]);
+    if (accumulated + segDist >= targetDist) {
+      // Interpolate within this segment
+      const remaining = targetDist - accumulated;
+      const t = segDist > 0 ? remaining / segDist : 0;
+      const lat = coords[i-1][1] + t * (coords[i][1] - coords[i-1][1]);
+      const lng = coords[i-1][0] + t * (coords[i][0] - coords[i-1][0]);
+      return { lat, lng };
+    }
+    accumulated += segDist;
+  }
+  // Fallback: return endpoint
+  const last = coords[coords.length - 1];
+  return { lat: last[1], lng: last[0] };
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hrs}h ${rem}m` : `${hrs}h`;
+}
+
+async function showMeetingPoint() {
+  clearMeetResult();
   if (meetPoints.length < 2) return;
 
   const coords = meetPoints.map(p => ({ lat: p.data.lat, lng: p.data.lng }));
-  const mid = computeGeographicMidpoint(coords);
 
-  // Draw dashed lines from each start point to the midpoint
-  meetPoints.forEach(p => {
-    const line = L.polyline(
-      [[p.data.lat, p.data.lng], [mid.lat, mid.lng]],
-      {
-        color: p.data.color,
-        weight: 2,
-        dashArray: '8, 6',
-        opacity: 0.6,
-      }
-    ).addTo(map);
+  meetFindBtn.disabled = true;
+  meetFindBtn.textContent = 'Calculating route...';
+  meetInfoEl.innerHTML = '<p>Fetching routes from OSRM...</p>';
+
+  try {
+    if (meetPoints.length === 2) {
+      await showTwoPointMidpoint(coords);
+    } else {
+      await showMultiPointMidpoint(coords);
+    }
+  } catch (err) {
+    console.error('Routing error:', err);
+    // Fall back to geographic midpoint
+    meetInfoEl.innerHTML = `<p class="help-text">Routing failed (${err.message}). Showing geographic midpoint instead.</p>`;
+    showGeographicFallback(coords);
+  } finally {
+    meetFindBtn.disabled = false;
+    meetFindBtn.textContent = 'Find Meeting Point';
+  }
+}
+
+async function showTwoPointMidpoint(coords) {
+  const [a, b] = coords;
+
+  // Get route A→B
+  const route = await osrmRoute(a, b);
+  const totalDuration = route.duration;
+  const totalDistance = route.distance;
+
+  // Find midpoint along route at 50% distance
+  const mid = pointAlongRoute(route, 0.5);
+
+  // Get routes from each point to midpoint for accurate times
+  const [routeA, routeB] = await Promise.all([
+    osrmRoute(a, mid),
+    osrmRoute(b, mid),
+  ]);
+
+  // Draw the full route as two colored halves
+  const routeALatLngs = routeToLatLngs(routeA);
+  const routeBLatLngs = routeToLatLngs(routeB);
+
+  const lineA = L.polyline(routeALatLngs, {
+    color: meetPoints[0].data.color,
+    weight: 4,
+    opacity: 0.8,
+  }).addTo(map);
+  meetLines.push(lineA);
+
+  const lineB = L.polyline(routeBLatLngs, {
+    color: meetPoints[1].data.color,
+    weight: 4,
+    opacity: 0.8,
+  }).addTo(map);
+  meetLines.push(lineB);
+
+  // Place midpoint marker
+  placeMidpointMarker(mid, [
+    { name: meetPoints[0].data.address, duration: routeA.duration, distance: routeA.distance },
+    { name: meetPoints[1].data.address, duration: routeB.duration, distance: routeB.distance },
+  ]);
+
+  // Fit bounds to route
+  const allLatLngs = [...routeALatLngs, ...routeBLatLngs];
+  const bounds = L.latLngBounds(allLatLngs);
+  map.fitBounds(bounds.pad(0.15));
+}
+
+async function showMultiPointMidpoint(coords) {
+  // For 3+ points: start with geographic centroid, then use OSRM table
+  // to find the nearby point minimizing max travel time.
+  const geo = computeGeographicMidpoint(coords);
+
+  // Generate a grid of candidate points around the centroid
+  const offset = 0.05; // ~5km at mid-latitudes
+  const candidates = [
+    geo,
+    { lat: geo.lat + offset, lng: geo.lng },
+    { lat: geo.lat - offset, lng: geo.lng },
+    { lat: geo.lat, lng: geo.lng + offset },
+    { lat: geo.lat, lng: geo.lng - offset },
+    { lat: geo.lat + offset * 0.7, lng: geo.lng + offset * 0.7 },
+    { lat: geo.lat + offset * 0.7, lng: geo.lng - offset * 0.7 },
+    { lat: geo.lat - offset * 0.7, lng: geo.lng + offset * 0.7 },
+    { lat: geo.lat - offset * 0.7, lng: geo.lng - offset * 0.7 },
+  ];
+
+  meetInfoEl.innerHTML = '<p>Testing 9 candidate points...</p>';
+
+  // Use OSRM table to get durations from all starts to all candidates
+  const profile = osrmProfile();
+  const allPoints = [...coords, ...candidates];
+  const coordStr = allPoints.map(p => `${p.lng},${p.lat}`).join(';');
+  const sourceIndices = coords.map((_, i) => i).join(';');
+  const destIndices = candidates.map((_, i) => i + coords.length).join(';');
+
+  const url = `${OSRM_BASE}/table/v1/${profile}/${coordStr}?sources=${sourceIndices}&destinations=${destIndices}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`OSRM table error: ${resp.status}`);
+  const data = await resp.json();
+  if (data.code !== 'Ok') throw new Error('OSRM table failed');
+
+  // data.durations[source_idx][dest_idx] = seconds
+  // Find candidate minimizing the maximum duration from any source
+  let bestIdx = 0;
+  let bestMaxTime = Infinity;
+
+  for (let c = 0; c < candidates.length; c++) {
+    let maxTime = 0;
+    for (let s = 0; s < coords.length; s++) {
+      const t = data.durations[s][c];
+      if (t === null) { maxTime = Infinity; break; }
+      maxTime = Math.max(maxTime, t);
+    }
+    if (maxTime < bestMaxTime) {
+      bestMaxTime = maxTime;
+      bestIdx = c;
+    }
+  }
+
+  const mid = candidates[bestIdx];
+
+  // Get individual routes from each start to the best midpoint
+  const routes = await Promise.all(
+    coords.map((c, i) => osrmRoute(c, mid))
+  );
+
+  // Draw each route
+  routes.forEach((route, i) => {
+    const line = L.polyline(routeToLatLngs(route), {
+      color: meetPoints[i].data.color,
+      weight: 4,
+      opacity: 0.8,
+    }).addTo(map);
     meetLines.push(line);
   });
 
-  // Place the midpoint marker
+  // Place midpoint marker
+  const durations = routes.map((r, i) => ({
+    name: meetPoints[i].data.address,
+    duration: r.duration,
+    distance: r.distance,
+  }));
+  placeMidpointMarker(mid, durations);
+
+  // Fit bounds
+  const allLatLngs = routes.flatMap(r => routeToLatLngs(r));
+  const bounds = L.latLngBounds(allLatLngs);
+  map.fitBounds(bounds.pad(0.15));
+}
+
+function placeMidpointMarker(mid, durations) {
   const midIcon = L.divIcon({
     className: '',
     html: '<div class="midpoint-icon">★</div>',
@@ -1766,33 +1966,59 @@ function showMeetingPoint() {
 
   meetMidMarker = L.marker([mid.lat, mid.lng], { icon: midIcon }).addTo(map);
 
-  // Build info popup and sidebar text
+  const mode = modeLabel();
+  const popupHtml = `
+    <strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} Midpoint</strong><br>
+    <small>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</small><br>
+    ${durations.map(d => `<small>${d.name}: ${formatDuration(d.duration)} (${formatDistance(d.distance)})</small>`).join('<br>')}
+  `;
+  meetMidMarker.bindPopup(popupHtml).openPopup();
+
+  meetInfoEl.innerHTML = `
+    <p><strong>${mode.charAt(0).toUpperCase() + mode.slice(1)} midpoint</strong></p>
+    <p>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</p>
+    ${durations.map(d => `<p>${d.name}: <strong>${formatDuration(d.duration)}</strong> (${formatDistance(d.distance)})</p>`).join('')}
+  `;
+
+  meetClearBtn.style.display = '';
+}
+
+function showGeographicFallback(coords) {
+  const mid = computeGeographicMidpoint(coords);
+
+  meetPoints.forEach(p => {
+    const line = L.polyline(
+      [[p.data.lat, p.data.lng], [mid.lat, mid.lng]],
+      { color: p.data.color, weight: 2, dashArray: '8, 6', opacity: 0.6 }
+    ).addTo(map);
+    meetLines.push(line);
+  });
+
+  const midIcon = L.divIcon({
+    className: '',
+    html: '<div class="midpoint-icon">★</div>',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+  meetMidMarker = L.marker([mid.lat, mid.lng], { icon: midIcon }).addTo(map);
+
   const distances = meetPoints.map(p => {
     const d = haversineDistance(p.data.lat, p.data.lng, mid.lat, mid.lng);
     return { name: p.data.address, distance: d };
   });
 
-  const popupHtml = `
-    <strong>Geographic Midpoint</strong><br>
-    <small>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</small><br>
+  meetMidMarker.bindPopup(`
+    <strong>Geographic Midpoint (fallback)</strong><br>
     ${distances.map(d => `<small>${d.name}: ${formatDistance(d.distance)}</small>`).join('<br>')}
-  `;
-  meetMidMarker.bindPopup(popupHtml).openPopup();
+  `).openPopup();
 
-  // Sidebar info
-  meetInfoEl.innerHTML = `
-    <p><strong>Geographic midpoint</strong></p>
-    <p>${mid.lat.toFixed(5)}, ${mid.lng.toFixed(5)}</p>
-    ${distances.map(d => `<p>${d.name}: <strong>${formatDistance(d.distance)}</strong></p>`).join('')}
-    <p class="help-text" style="margin-top:6px">This is the straight-line midpoint. Travel-time routing coming soon.</p>
+  meetInfoEl.innerHTML += `
+    ${distances.map(d => `<p>${d.name}: <strong>${formatDistance(d.distance)}</strong> (straight line)</p>`).join('')}
   `;
 
   meetClearBtn.style.display = '';
-
-  // Fit map to show all points + midpoint
   const allPts = [...coords, mid];
-  const bounds = L.latLngBounds(allPts.map(p => [p.lat, p.lng]));
-  map.fitBounds(bounds.pad(0.2));
+  map.fitBounds(L.latLngBounds(allPts.map(p => [p.lat, p.lng])).pad(0.2));
 }
 
 // Haversine distance in meters

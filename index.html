@@ -9,95 +9,106 @@
 </head>
 <body>
   <div id="sidebar">
-    <h1>Circle Triangulation</h1>
-
-    <div class="input-group">
-      <label for="address">Address or Location</label>
-      <div class="address-row">
-        <input type="text" id="address" placeholder="e.g. 1600 Pennsylvania Ave, Washington DC" />
-        <button type="button" id="my-location-btn" class="icon-btn" title="Use my current location">&#x1F4CD;</button>
-      </div>
-    </div>
-
-    <div id="recent-locations" class="recent-locations" style="display:none">
-      <label class="recent-label">Recent Locations</label>
-      <div id="recent-list"></div>
-    </div>
-
-    <button id="pick-map-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
-
-    <div class="input-row">
-      <div class="input-group" style="flex:1">
-        <label for="radius">Radius</label>
-        <input type="number" id="radius" placeholder="e.g. 5.5" step="any" min="0" />
-      </div>
-      <div class="input-group" style="width:100px">
-        <label for="unit">Unit</label>
-        <select id="unit">
-          <option value="mi">mi</option>
-          <option value="ft">ft</option>
-          <option value="km">km</option>
-          <option value="m">m</option>
-        </select>
-      </div>
-    </div>
-
-    <input type="hidden" id="circle-color" value="#3388ff" />
-
-    <button id="preview-btn" class="btn btn-preview">Preview Circle</button>
-    <button id="accept-btn" class="btn btn-accept" disabled>Accept Circle</button>
-    <button id="cancel-btn" class="btn btn-cancel" style="display:none">Cancel Preview</button>
+    <h1>GeoTools</h1>
 
     <div id="status" class="status"></div>
 
-    <hr />
+    <!-- ====== Circle Triangulation ====== -->
+    <details class="feature-tray" id="tray-circles" open>
+      <summary class="tray-header tray-header--blue">Circle Triangulation</summary>
+      <div class="tray-body">
+        <div class="input-group">
+          <label for="address">Address or Location</label>
+          <div class="address-row">
+            <input type="text" id="address" placeholder="e.g. 1600 Pennsylvania Ave, Washington DC" />
+            <button type="button" id="my-location-btn" class="icon-btn" title="Use my current location">&#x1F4CD;</button>
+          </div>
+        </div>
 
-    <h2>Circles</h2>
-    <div id="circle-list" class="circle-list">
-      <p class="empty-msg">No circles yet.</p>
-    </div>
+        <div id="recent-locations" class="recent-locations" style="display:none">
+          <label class="recent-label">Recent Locations</label>
+          <div id="recent-list"></div>
+        </div>
 
-    <hr />
+        <button id="pick-map-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
 
-    <h2>Intersections</h2>
-    <button id="show-intersections-btn" class="btn btn-intersections" disabled>Show Intersections</button>
-    <button id="clear-intersections-btn" class="btn btn-cancel" style="display:none">Clear Intersections</button>
-    <div id="intersection-info" class="intersection-info"></div>
+        <div class="input-row">
+          <div class="input-group" style="flex:1">
+            <label for="radius">Radius</label>
+            <input type="number" id="radius" placeholder="e.g. 5.5" step="any" min="0" />
+          </div>
+          <div class="input-group" style="width:100px">
+            <label for="unit">Unit</label>
+            <select id="unit">
+              <option value="mi">mi</option>
+              <option value="ft">ft</option>
+              <option value="km">km</option>
+              <option value="m">m</option>
+            </select>
+          </div>
+        </div>
 
-    <hr />
+        <input type="hidden" id="circle-color" value="#3388ff" />
 
-    <h2>Population Analysis</h2>
-    <p class="help-text">1 circle: highlights populated edges. 2+ circles: highlights populated intersections.</p>
-    <button id="analyze-pop-btn" class="btn btn-population" disabled>Analyze Population</button>
-    <button id="clear-pop-btn" class="btn btn-cancel" style="display:none">Clear Population Data</button>
-    <div id="population-info" class="intersection-info"></div>
+        <button id="preview-btn" class="btn btn-preview">Preview Circle</button>
+        <button id="accept-btn" class="btn btn-accept" disabled>Accept Circle</button>
+        <button id="cancel-btn" class="btn btn-cancel" style="display:none">Cancel Preview</button>
 
-    <hr />
+        <h3 class="tray-section-title">Circles</h3>
+        <div id="circle-list" class="circle-list">
+          <p class="empty-msg">No circles yet.</p>
+        </div>
 
-    <h2>Meeting Point</h2>
-    <p class="help-text">Add 2+ starting locations to find the best meeting point between them.</p>
+        <h3 class="tray-section-title">Intersections</h3>
+        <button id="show-intersections-btn" class="btn btn-intersections" disabled>Show Intersections</button>
+        <button id="clear-intersections-btn" class="btn btn-cancel" style="display:none">Clear Intersections</button>
+        <div id="intersection-info" class="intersection-info"></div>
 
-    <div class="input-group">
-      <label for="meet-address">Address or Location</label>
-      <div class="address-row">
-        <input type="text" id="meet-address" placeholder="e.g. 1600 Pennsylvania Ave" />
-        <button type="button" id="meet-location-btn" class="icon-btn" title="Use my current location">&#x1F4CD;</button>
+        <h3 class="tray-section-title">Population Analysis</h3>
+        <p class="help-text">1 circle: highlights populated edges. 2+ circles: highlights populated intersections.</p>
+        <button id="analyze-pop-btn" class="btn btn-population" disabled>Analyze Population</button>
+        <button id="clear-pop-btn" class="btn btn-cancel" style="display:none">Clear Population Data</button>
+        <div id="population-info" class="intersection-info"></div>
       </div>
-    </div>
+    </details>
 
-    <button id="meet-pick-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
-    <button id="meet-add-btn" class="btn btn-meet-add">Add Start Point</button>
+    <!-- ====== Meeting Point ====== -->
+    <details class="feature-tray" id="tray-meeting" open>
+      <summary class="tray-header tray-header--green">Meeting Point</summary>
+      <div class="tray-body">
+        <p class="help-text">Add 2+ locations to find the driving-time midpoint between them.</p>
 
-    <div id="meet-list" class="meet-list">
-      <p class="empty-msg">No start points yet.</p>
-    </div>
+        <div class="input-group">
+          <label for="meet-address">Address or Location</label>
+          <div class="address-row">
+            <input type="text" id="meet-address" placeholder="e.g. 1600 Pennsylvania Ave" />
+            <button type="button" id="meet-location-btn" class="icon-btn" title="Use my current location">&#x1F4CD;</button>
+          </div>
+        </div>
 
-    <button id="meet-find-btn" class="btn btn-meet-find" disabled>Find Meeting Point</button>
-    <button id="meet-clear-btn" class="btn btn-cancel" style="display:none">Clear Meeting Point</button>
-    <div id="meet-info" class="intersection-info"></div>
+        <button id="meet-pick-btn" class="btn btn-pick-map">&#x1F5FA; Pick on Map</button>
+        <button id="meet-add-btn" class="btn btn-meet-add">Add Start Point</button>
 
-    <hr />
+        <div id="meet-list" class="meet-list">
+          <p class="empty-msg">No start points yet.</p>
+        </div>
 
+        <div class="input-group">
+          <label for="meet-mode">Travel Mode</label>
+          <select id="meet-mode">
+            <option value="driving">Driving</option>
+            <option value="walking">Walking</option>
+            <option value="cycling">Cycling</option>
+          </select>
+        </div>
+
+        <button id="meet-find-btn" class="btn btn-meet-find" disabled>Find Meeting Point</button>
+        <button id="meet-clear-btn" class="btn btn-cancel" style="display:none">Clear Meeting Point</button>
+        <div id="meet-info" class="intersection-info"></div>
+      </div>
+    </details>
+
+    <!-- ====== Dev Tools ====== -->
     <details class="dev-tools">
       <summary>Dev Tools</summary>
       <button id="dev-add-test" class="btn btn-dev">Add 2 Test Circles</button>
