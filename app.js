@@ -1,4 +1,31 @@
-const API_BASE = 'http://localhost:8081';
+const API_BASE = window.APP_CONFIG?.apiBase || 'http://localhost:8081';
+
+/**
+ * Authenticated fetch wrapper for backend API calls.
+ * Attaches Firebase ID token if available. Retries once on 401.
+ */
+async function apiFetch(url, options = {}) {
+  const addAuth = async (opts) => {
+    if (window.GeoAuth) {
+      const token = await window.GeoAuth.getToken();
+      if (token) {
+        opts.headers = { ...opts.headers, 'Authorization': `Bearer ${token}` };
+      }
+    }
+    return opts;
+  };
+
+  let opts = await addAuth({ ...options });
+  let resp = await fetch(url, opts);
+
+  // Retry once on 401 with a fresh token
+  if (resp.status === 401 && window.GeoAuth) {
+    opts = await addAuth({ ...options });
+    resp = await fetch(url, opts);
+  }
+
+  return resp;
+}
 
 const map = L.map('map').setView([39.8283, -98.5795], 4);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -852,7 +879,7 @@ acceptBtn.addEventListener('click', () => {
 
 async function fetchAndDrawDensity(entry) {
   try {
-    const res = await fetch(`${API_BASE}/density/sample-circle`, {
+    const res = await apiFetch(`${API_BASE}/density/sample-circle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1219,7 +1246,7 @@ showIntersectionsBtn.addEventListener('click', async () => {
   // Try to enrich with population density from backend
   let densityData = null;
   try {
-    const res = await fetch(`${API_BASE}/density/at-points`, {
+    const res = await apiFetch(`${API_BASE}/density/at-points`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ points: allPoints }),
@@ -1385,7 +1412,7 @@ analyzePopBtn.addEventListener('click', async () => {
 });
 
 async function analyzeSingleCircle(entry) {
-  const res = await fetch(`${API_BASE}/density/sample-circle`, {
+  const res = await apiFetch(`${API_BASE}/density/sample-circle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1459,7 +1486,7 @@ async function analyzeIntersections() {
   }
 
   // Query density at intersection points
-  const res = await fetch(`${API_BASE}/density/at-points`, {
+  const res = await apiFetch(`${API_BASE}/density/at-points`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ points: allPoints }),
@@ -1906,7 +1933,7 @@ async function osrmTableForCorridor(a, b, samplePoints) {
 
 async function fetchDensitiesAtPoints(points) {
   try {
-    const res = await fetch(`${API_BASE}/density/at-points`, {
+    const res = await apiFetch(`${API_BASE}/density/at-points`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ points: points.map(p => ({ lat: p.lat, lng: p.lng })) }),
@@ -2447,6 +2474,42 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     acceptBtn.click();
     return;
+  }
+});
+
+// --- Mobile sidebar toggle ---
+const sidebarToggle = document.getElementById('sidebar-toggle');
+const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+const sidebar = document.getElementById('sidebar');
+
+function openSidebar() {
+  sidebar.classList.add('open');
+  sidebarBackdrop.classList.add('active');
+  sidebarBackdrop.style.display = 'block';
+}
+
+function closeSidebar() {
+  sidebar.classList.remove('open');
+  sidebarBackdrop.classList.remove('active');
+  // Wait for transition before hiding backdrop
+  setTimeout(() => {
+    if (!sidebar.classList.contains('open')) {
+      sidebarBackdrop.style.display = 'none';
+    }
+  }, 300);
+}
+
+function isMobile() {
+  return window.matchMedia('(max-width: 767px)').matches;
+}
+
+if (sidebarToggle) sidebarToggle.addEventListener('click', openSidebar);
+if (sidebarBackdrop) sidebarBackdrop.addEventListener('click', closeSidebar);
+
+// Escape key closes sidebar on mobile
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isMobile() && sidebar.classList.contains('open')) {
+    closeSidebar();
   }
 });
 

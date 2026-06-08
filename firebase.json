@@ -1,0 +1,34 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "backend/**",
+      "node_modules/**",
+      "Makefile",
+      "docker-compose.yml",
+      ".git/**",
+      ".github/**",
+      ".gitignore",
+      ".eslintrc.json",
+      "package.json",
+      "package-lock.json",
+      "config.example.js",
+      "firebase-debug.log",
+      "**/*.md"
+    ],
+    "headers": [
+      {
+        "source": "**/*.js",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=300" }
+        ]
+      },
+      {
+        "source": "**/*.css",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=300" }
+        ]
+      }
+    ]
+  }
+}

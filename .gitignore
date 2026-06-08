@@ -10,5 +10,15 @@ backend/data/population/*.tif
 backend/data/osm/*.pbf
 backend/data/osm/*.osm
 
+# Environment config (contains Firebase keys + env-specific URLs)
+config.js
+
+# Firebase
+firebase-debug.log
+.firebase/
+
+# Node
+node_modules/
+
 # OS
 .DS_Store

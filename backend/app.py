@@ -3,7 +3,7 @@
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -183,7 +183,7 @@ class NearbyPOIRequest(BaseModel):
     lat: float
     lng: float
     radius_meters: float = Field(default=500, ge=50, le=5000)
-    categories: list[str] | None = None
+    categories: Optional[List[str]] = None
     limit: int = Field(default=50, ge=1, le=200)
 
 

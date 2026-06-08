@@ -27,8 +27,131 @@ body {
 
 h1 {
   font-size: 1.3rem;
-  margin-bottom: 12px;
+  margin-bottom: 0;
   color: #16213e;
+}
+
+/* --- Login Overlay --- */
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+}
+
+.login-overlay.hidden {
+  display: none;
+}
+
+.login-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 48px 40px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 400px;
+  width: 90%;
+}
+
+.login-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.login-title {
+  font-size: 2rem;
+  margin-bottom: 8px;
+  color: #1a1a2e;
+}
+
+.login-subtitle {
+  color: #6c757d;
+  margin-bottom: 32px;
+  font-size: 0.95rem;
+}
+
+.btn-google-sign-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 24px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #3c4043;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.btn-google-sign-in:hover {
+  background: #f7f8f8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.btn-google-sign-in:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-error {
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+/* --- Sidebar Header --- */
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.user-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: #6c757d;
+}
+
+.user-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+
+.user-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-sign-out {
+  background: none;
+  border: none;
+  color: #adb5bd;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn-sign-out:hover {
+  color: #dc3545;
+  background: #fee2e2;
 }
 
 h2 {
@@ -790,4 +913,146 @@ details.feature-tray[open] > .tray-header::before {
   color: #495057;
   border: 1px dashed #adb5bd;
   font-size: 0.82rem;
+}
+
+/* --- Hamburger Toggle (hidden on desktop) --- */
+
+.sidebar-toggle {
+  display: none;
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 900;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #1a1a2e;
+  transition: background 0.15s;
+}
+
+.sidebar-toggle:hover {
+  background: #f0f0f0;
+}
+
+/* --- Backdrop (hidden on desktop) --- */
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.sidebar-backdrop.active {
+  opacity: 1;
+}
+
+/* ==============================================
+   RESPONSIVE BREAKPOINTS
+   ============================================== */
+
+/* --- Mobile: < 768px — sidebar as drawer --- */
+@media (max-width: 767px) {
+  .sidebar-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 85vw;
+    max-width: 360px;
+    min-width: 0;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: none;
+  }
+
+  #sidebar.open {
+    transform: translateX(0);
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.15);
+  }
+
+  .sidebar-backdrop.active {
+    display: block;
+  }
+
+  #map {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh; /* iOS Safari dynamic viewport height */
+  }
+
+  /* Move Leaflet zoom controls to avoid hamburger button overlap */
+  .leaflet-top.leaflet-left {
+    top: 56px;
+  }
+
+  /* Larger touch targets */
+  .btn {
+    min-height: 44px;
+    font-size: 0.9rem;
+  }
+
+  input[type="text"],
+  input[type="number"],
+  select {
+    font-size: 16px; /* prevents iOS auto-zoom on focus */
+    min-height: 40px;
+  }
+
+  /* Full-width modal on mobile */
+  .modal {
+    width: 95%;
+    max-width: none;
+  }
+
+  /* Circle list items: larger tap area */
+  .circle-item {
+    padding: 10px;
+  }
+
+  /* Login card adjusts */
+  .login-card {
+    padding: 36px 24px;
+  }
+}
+
+/* --- Tablet: 768px–1023px — narrower sidebar --- */
+@media (min-width: 768px) and (max-width: 1023px) {
+  #sidebar {
+    width: 320px;
+    min-width: 320px;
+    padding: 16px;
+  }
+}
+
+/* --- Large screens: 1440px+ --- */
+@media (min-width: 1440px) {
+  #sidebar {
+    width: 420px;
+    min-width: 420px;
+  }
+}
+
+/* --- Ultrawide: 2000px+ --- */
+@media (min-width: 2000px) {
+  #sidebar {
+    width: 480px;
+    min-width: 480px;
+  }
 }
